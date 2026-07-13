@@ -1,0 +1,15 @@
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# yt-dlp / whisper scratch files
+*.vtt
+*.part
+*.webm
+*.m4a
+*.mp3
