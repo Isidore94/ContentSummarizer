@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import tempfile
 
 from anthropic import Anthropic
@@ -42,7 +43,10 @@ class PipelineError(Exception):
 
 def _run_yt_dlp(args):
     """Run yt-dlp with the given args, returning the CompletedProcess."""
-    cmd = ["yt-dlp", *args]
+    # Invoke via the current interpreter: the bare "yt-dlp" command is only on
+    # PATH when the venv is activated, and Task Scheduler runs python.exe
+    # directly without activation.
+    cmd = [sys.executable, "-m", "yt_dlp", *args]
     log.debug("running: %s", " ".join(cmd))
     try:
         return subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -133,10 +137,27 @@ def strip_vtt(raw):
     return "\n".join(lines)
 
 
+def _register_cuda_dlls():
+    """Windows: the pip-installed CUDA libs (nvidia-cublas-cu12,
+    nvidia-cudnn-cu12) live in site-packages/nvidia/*/bin, which is on no DLL
+    search path — register those dirs so ctranslate2 can load them."""
+    if os.name != "nt":
+        return
+    import sysconfig
+
+    site_packages = sysconfig.get_paths()["purelib"]
+    for lib in ("cublas", "cudnn", "cuda_nvrtc"):
+        bin_dir = os.path.join(site_packages, "nvidia", lib, "bin")
+        if os.path.isdir(bin_dir):
+            os.add_dll_directory(bin_dir)
+            os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+
+
 def _get_whisper_model():
     """Load (once) and return the cached faster-whisper model."""
     global _whisper_model
     if _whisper_model is None:
+        _register_cuda_dlls()
         from faster_whisper import WhisperModel  # heavy import; load lazily
 
         log.info("loading faster-whisper %s on %s", WHISPER_MODEL, WHISPER_DEVICE)
