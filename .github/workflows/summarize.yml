@@ -1,50 +1,31 @@
 name: Summarize queued videos
 
-# Event-driven cloud drain. When a YouTube link is added to the queue (an
-# issue is opened — e.g. by the iOS Shortcut), GitHub runs drain.py on a
-# hosted runner: summarize, commit to summaries/, comment, close. No home
-# machine required. A once-daily schedule backstops any missed event.
+# Event-driven drain on a SELF-HOSTED runner (a home PC). GitHub dispatches
+# the job when an issue is opened; the runner executes it from your home IP,
+# so yt-dlp isn't blocked by YouTube's datacenter-IP bot check (which is why
+# the GitHub-hosted runner failed). It reuses the local checkout's venv and
+# .env, so no per-run installs and no repo secrets are needed — and it can use
+# the local GPU (TRANSCRIBE_BACKEND=local in .env) for caption-less videos.
 
 on:
   issues:
     types: [opened, reopened]
-  workflow_dispatch: {}       # manual "Run workflow" button
+  workflow_dispatch: {}
   schedule:
-    - cron: "0 7 * * *"       # daily backstop (07:00 UTC) for missed events
+    - cron: "0 7 * * *"       # daily backstop (runs when the runner is online)
 
-# Let the built-in GITHUB_TOKEN list/comment/close issues and commit summaries.
-permissions:
-  contents: write
-  issues: write
-
-# Never run two drains at once — drain.py processes every open issue, so
-# overlapping runs could double-process. Queue them instead of cancelling.
+# Never run two drains at once (drain.py processes every open issue).
 concurrency:
   group: summarize-queue
   cancel-in-progress: false
 
 jobs:
   summarize:
-    runs-on: ubuntu-latest
+    # Matches the labels the runner registers with. If you host the runner
+    # somewhere other than D:\ContentSummarizer, update working-directory below.
+    runs-on: [self-hosted, windows]
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: requirements-cloud.txt
-
-      - name: Install dependencies
-        run: pip install -r requirements-cloud.txt
-
       - name: Drain the queue
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          GITHUB_REPO: ${{ github.repository }}
-          # Accept either name: OPENAI_API_KEY (preferred) or OPEN_API_KEY
-          # (tolerated so a common typo in the secret name still works).
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.OPEN_API_KEY }}
-          SUMMARY_PROVIDER: openai
-          TRANSCRIBE_BACKEND: openai
-        run: python drain.py
+        working-directory: D:\ContentSummarizer
+        shell: cmd
+        run: .venv\Scripts\python.exe drain.py
