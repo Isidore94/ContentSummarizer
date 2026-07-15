@@ -38,6 +38,16 @@ load_dotenv()
 SUMMARY_DIR = os.path.join(drain.REPO_DIR, "summaries")
 _STEM_RE = re.compile(r"^[-\w]+$")
 
+# Viewer mode: run the dashboard WITHOUT its polling worker, so it coexists
+# with another drainer (e.g. a self-hosted GitHub Actions runner) instead of
+# double-processing the queue. The UI still lists the queue, adds videos, and
+# browses summaries — the other drainer does the summarizing.
+NO_WORKER = os.environ.get("DASHBOARD_NO_WORKER", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
 worker: Worker | None = None
 
 
@@ -45,9 +55,12 @@ worker: Worker | None = None
 async def lifespan(app: FastAPI):
     global worker
     worker = Worker()
-    threading.Thread(
-        target=worker.run_forever, daemon=True, name="drain-worker"
-    ).start()
+    if NO_WORKER:
+        worker._set(state="viewer mode (an external runner drains the queue)")
+    else:
+        threading.Thread(
+            target=worker.run_forever, daemon=True, name="drain-worker"
+        ).start()
     yield
 
 
@@ -206,32 +219,46 @@ def home():
         )
         gpu_html = f"<span><b>GPU PC:</b> {gpu_badge}</span>"
 
-    seg = []
-    for value, label in (("auto", "Auto"), ("openai", "OpenAI API"), ("remote", "GPU PC")):
-        active = " active" if backend == value else ""
-        seg.append(
-            f'<form method="post" action="/settings/transcribe">'
-            f'<input type="hidden" name="mode" value="{value}">'
-            f'<button class="{active.strip()}">{label}</button></form>'
+    if NO_WORKER:
+        seg_html = ""
+        controls_html = (
+            '<p class="muted">Viewer mode — the GitHub Actions runner drains the '
+            "queue. Adding a video below opens an issue that the runner picks up.</p>"
         )
-    seg_html = (
-        f'<div class="seg"><span class="muted">Transcription:</span>{"".join(seg)}'
-        '<span class="muted">(resets to .env on restart)</span></div>'
-    )
+        meta_html = f'<p class="muted">summaries via {html.escape(provider)}</p>'
+    else:
+        seg = []
+        for value, label in (("auto", "Auto"), ("openai", "OpenAI API"), ("remote", "GPU PC")):
+            active = " active" if backend == value else ""
+            seg.append(
+                f'<form method="post" action="/settings/transcribe">'
+                f'<input type="hidden" name="mode" value="{value}">'
+                f'<button class="{active.strip()}">{label}</button></form>'
+            )
+        seg_html = (
+            f'<div class="seg"><span class="muted">Transcription:</span>{"".join(seg)}'
+            '<span class="muted">(resets to .env on restart)</span></div>'
+        )
+        controls_html = (
+            '<p style="margin-bottom:0"><form class="inline" method="post" '
+            'action="/drain" style="margin-left:0"><button>Drain now</button></form></p>'
+        )
+        meta_html = (
+            f'<p class="muted">summaries via {html.escape(provider)} · '
+            f"polling every {worker.poll_seconds}s</p>"
+        )
 
     body = f"""
 <div class="card">
   <div class="status-line">
     <span><b>State:</b> {html.escape(str(s["state"]))}</span>
-    <span><b>Last poll:</b> {_ago(s["last_poll"])} ({html.escape(s["last_result"] or "—")})</span>
-    <span><b>Lifetime:</b> {s["ok_total"]} ok / {s["failed_total"]} failed</span>
+    {"" if NO_WORKER else f'<span><b>Last poll:</b> {_ago(s["last_poll"])} ({html.escape(s["last_result"] or "—")})</span>'}
+    {"" if NO_WORKER else f'<span><b>Lifetime:</b> {s["ok_total"]} ok / {s["failed_total"]} failed</span>'}
     {gpu_html}
   </div>
-  <p class="muted">summaries via {html.escape(provider)} · polling every {worker.poll_seconds}s</p>
+  {meta_html}
   {seg_html}
-  <p style="margin-bottom:0"><form class="inline" method="post" action="/drain" style="margin-left:0">
-    <button>Drain now</button>
-  </form></p>
+  {controls_html}
 </div>
 
 <h2>Add a video</h2>
