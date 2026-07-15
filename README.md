@@ -148,6 +148,26 @@ Register-ScheduledTask -TaskName "ContentSummarizer" `
 > task"*. Together they ensure the queue drains on the next wake even if the
 > desktop was asleep at 6pm.
 
+## Always-on mode (mini PC + dashboard)
+
+Instead of the daily 6 pm task, run `dashboard.py` on any always-on box — no
+GPU needed:
+
+- **Worker**: polls the queue every `POLL_INTERVAL_SECONDS` (default 120) and
+  summarizes videos as they arrive.
+- **Dashboard**: a LAN web UI on port 8787 — queue view, paste-a-URL box,
+  *Drain now*, per-video *Retry*, and browsable/searchable summaries.
+- **Transcription without a GPU**: caption-less videos go through the OpenAI
+  audio API when `TRANSCRIBE_BACKEND=openai` (the default); set `local` to use
+  faster-whisper on CUDA instead.
+- **Failure handling**: failed videos get the `summarize-failed` label and are
+  retried after `RETRY_FAILED_HOURS` (default 24), or immediately via the
+  dashboard's Retry button. A manual `python drain.py` retries everything.
+
+See **[SETUP_MINI_PC.md](SETUP_MINI_PC.md)** for the full setup (and remember
+to disable the desktop's scheduled task once the always-on worker takes over —
+one drainer at a time).
+
 ## Adding videos from your phone
 
 See **[MOBILE_SHORTCUT.md](MOBILE_SHORTCUT.md)** for the iOS Shortcut recipe:

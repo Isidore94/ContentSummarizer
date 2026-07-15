@@ -13,6 +13,7 @@ import html
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,6 +31,16 @@ OPENAI_SUMMARY_MODEL_DEFAULT = "gpt-4o-mini"
 WHISPER_MODEL = "large-v3"
 WHISPER_DEVICE = "cuda"
 WHISPER_COMPUTE_TYPE = "float16"
+
+# Transcription fallback backend for caption-less videos: "openai" (audio API,
+# no GPU needed — the default) or "local" (faster-whisper on CUDA, above).
+TRANSCRIBE_BACKEND_DEFAULT = "openai"
+OPENAI_TRANSCRIBE_MODEL_DEFAULT = "whisper-1"
+
+# The OpenAI audio API rejects uploads over 25 MB; we transcode down to mono
+# 16 kHz 32 kbps mp3 (fine for speech) and chunk anything still over the cap.
+_OPENAI_AUDIO_LIMIT_BYTES = 24 * 1024 * 1024
+_AUDIO_CHUNK_SECONDS = 1200
 
 # Guard against a pathologically long transcript blowing past the context window.
 MAX_TRANSCRIPT_CHARS = 500_000
@@ -169,30 +180,118 @@ def _get_whisper_model():
     return _whisper_model
 
 
-def transcribe_whisper(url):
+def _download_audio(url, workdir):
+    """Download bestaudio into ``workdir`` and return the file path."""
+    _run_yt_dlp(
+        [
+            "-f",
+            "bestaudio",
+            "--no-warnings",
+            "-o",
+            os.path.join(workdir, "%(id)s.%(ext)s"),
+            url,
+        ]
+    )
+    files = [os.path.join(workdir, f) for f in os.listdir(workdir)]
+    if not files:
+        raise PipelineError("audio download produced no file")
+    return files[0]
+
+
+def transcribe_local(url):
     """Download the audio and transcribe it locally with faster-whisper."""
     with tempfile.TemporaryDirectory() as workdir:
-        _run_yt_dlp(
-            [
-                "-f",
-                "bestaudio",
-                "--no-warnings",
-                "-o",
-                os.path.join(workdir, "%(id)s.%(ext)s"),
-                url,
-            ]
-        )
-        files = [os.path.join(workdir, f) for f in os.listdir(workdir)]
-        if not files:
-            raise PipelineError("audio download produced no file")
-
+        audio = _download_audio(url, workdir)
         model = _get_whisper_model()
-        log.info("transcribing audio with whisper (this can take a while)")
-        segments, _ = model.transcribe(files[0])
+        log.info("transcribing audio with local whisper (this can take a while)")
+        segments, _ = model.transcribe(audio)
         text = " ".join(segment.text.strip() for segment in segments).strip()
         if not text:
             raise PipelineError("whisper produced an empty transcript")
         return text
+
+
+def _ffmpeg(args):
+    """Run ffmpeg with the given args, raising PipelineError on failure."""
+    exe = shutil.which("ffmpeg")
+    if not exe:
+        raise PipelineError(
+            "ffmpeg not found on PATH (required for the transcription fallback)"
+        )
+    proc = subprocess.run(
+        [exe, "-hide_banner", "-loglevel", "error", *args],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode:
+        raise PipelineError(f"ffmpeg failed ({proc.returncode}): {proc.stderr.strip()}")
+
+
+def transcribe_openai(url):
+    """Download the audio and transcribe it with the OpenAI audio API.
+
+    No GPU needed — this is the fallback of choice for boxes without CUDA
+    (e.g. an always-on mini PC).
+    """
+    model = os.environ.get("OPENAI_TRANSCRIBE_MODEL", OPENAI_TRANSCRIBE_MODEL_DEFAULT)
+    client = OpenAI()
+    with tempfile.TemporaryDirectory() as workdir:
+        raw = _download_audio(url, workdir)
+        # Speech survives heavy compression: mono 16 kHz 32 kbps keeps ~2 h of
+        # audio under the API's upload cap.
+        small = os.path.join(workdir, "audio.mp3")
+        _ffmpeg(["-y", "-i", raw, "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k", small])
+
+        if os.path.getsize(small) <= _OPENAI_AUDIO_LIMIT_BYTES:
+            chunks = [small]
+        else:
+            _ffmpeg(
+                [
+                    "-y",
+                    "-i",
+                    small,
+                    "-f",
+                    "segment",
+                    "-segment_time",
+                    str(_AUDIO_CHUNK_SECONDS),
+                    "-c",
+                    "copy",
+                    os.path.join(workdir, "chunk_%03d.mp3"),
+                ]
+            )
+            chunks = sorted(glob.glob(os.path.join(workdir, "chunk_*.mp3")))
+
+        parts = []
+        for i, chunk in enumerate(chunks):
+            if len(chunks) > 1:
+                log.info("transcribing chunk %d/%d", i + 1, len(chunks))
+            try:
+                with open(chunk, "rb") as fh:
+                    parts.append(
+                        client.audio.transcriptions.create(model=model, file=fh).text
+                    )
+            except Exception as exc:  # openai.APIError and friends
+                raise PipelineError(f"OpenAI transcription failed: {exc}") from exc
+
+        text = " ".join(p.strip() for p in parts).strip()
+        if not text:
+            raise PipelineError("openai transcription produced an empty transcript")
+        return text
+
+
+def transcribe(url):
+    """Transcribe a video's audio using the configured fallback backend."""
+    backend = os.environ.get(
+        "TRANSCRIBE_BACKEND", TRANSCRIBE_BACKEND_DEFAULT
+    ).strip().lower()
+    if backend == "openai":
+        log.info("transcribing via the OpenAI audio API")
+        return transcribe_openai(url)
+    if backend == "local":
+        return transcribe_local(url)
+    raise PipelineError(
+        f"Unknown TRANSCRIBE_BACKEND {backend!r}; expected 'openai' or 'local'"
+    )
 
 
 _SUMMARY_SYSTEM = (
@@ -293,8 +392,8 @@ def summarize_video(url, force_whisper=False, api_key=None):
 
     if not transcript:
         if not force_whisper:
-            log.info("no captions found; falling back to whisper")
-        transcript = transcribe_whisper(url)
+            log.info("no captions found; falling back to transcription")
+        transcript = transcribe(url)
 
     body = summarize(transcript, api_key=api_key)
     if not body:

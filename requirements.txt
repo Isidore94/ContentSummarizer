@@ -13,3 +13,9 @@ python-dotenv
 
 # GitHub REST API client (chosen over PyGithub for explicit, minimal calls)
 requests
+
+# Always-on worker + LAN dashboard (mini-PC mode; see SETUP_MINI_PC.md)
+fastapi
+uvicorn
+markdown
+python-multipart

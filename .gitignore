@@ -13,3 +13,6 @@ env/
 *.webm
 *.m4a
 *.mp3
+
+# worker/dashboard logs
+*.log

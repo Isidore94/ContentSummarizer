@@ -13,6 +13,7 @@ import base64
 import logging
 import os
 import re
+import subprocess
 import sys
 
 import requests
@@ -24,6 +25,12 @@ log = logging.getLogger("drain")
 
 GITHUB_API = "https://api.github.com"
 SUMMARY_DIR = "summaries"
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Label put on issues that failed to process. The always-on worker skips
+# labeled issues until its retry window elapses (or the label is removed via
+# the dashboard's Retry button); a manual `python drain.py` retries them all.
+SKIP_LABEL = "summarize-failed"
 
 
 def _require_env(name):
@@ -83,8 +90,34 @@ class GitHub:
             page += 1
         return issues
 
+    def create_issue(self, title):
+        return self._request("POST", "issues", json={"title": title}).json()
+
     def comment(self, number, body):
         self._request("POST", f"issues/{number}/comments", json={"body": body})
+
+    def ensure_label(self, name, color="d93f0b", description=""):
+        """Create the label in the repo if it doesn't exist yet."""
+        resp = self.session.get(self._url(f"labels/{name}"), timeout=30)
+        if resp.ok:
+            return
+        self._request(
+            "POST",
+            "labels",
+            json={"name": name, "color": color, "description": description},
+        )
+
+    def add_label(self, number, name):
+        self._request("POST", f"issues/{number}/labels", json={"labels": [name]})
+
+    def remove_label(self, number, name):
+        resp = self.session.delete(
+            self._url(f"issues/{number}/labels/{name}"), timeout=30
+        )
+        if not resp.ok and resp.status_code != 404:  # 404 = label already gone
+            raise RuntimeError(
+                f"GitHub DELETE label {name} failed ({resp.status_code}): {resp.text}"
+            )
 
     def close_issue(self, number):
         self._request(
@@ -121,6 +154,23 @@ def sanitize_title(title):
     return slug[:80].strip("-") or "summary"
 
 
+def sync_repo():
+    """Fast-forward the local clone so summaries committed via the API land on
+    disk too (the dashboard reads them from the working tree)."""
+    try:
+        proc = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=REPO_DIR,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if proc.returncode:
+            log.warning("git pull failed: %s", (proc.stderr or proc.stdout).strip())
+    except Exception as exc:
+        log.warning("git pull failed: %s", exc)
+
+
 def process_issue(gh, issue, force_whisper):
     """Summarize one issue's video, commit it, comment, and close the issue."""
     number = issue["number"]
@@ -133,6 +183,8 @@ def process_issue(gh, issue, force_whisper):
     gh.commit_file(path, result["markdown"], f"Add summary: {result['title']}")
     gh.comment(number, result["markdown"])
     gh.close_issue(number)
+    if any(l["name"] == SKIP_LABEL for l in issue.get("labels", [])):
+        gh.remove_label(number, SKIP_LABEL)  # succeeded on retry
     log.info("issue #%s done -> %s", number, path)
 
 
@@ -151,6 +203,10 @@ def main():
     force_whisper = os.environ.get("FORCE_WHISPER", "").lower() in {"1", "true", "yes"}
 
     gh = GitHub(token, repo)
+    try:
+        gh.ensure_label(SKIP_LABEL, description="ContentSummarizer failed on this video")
+    except Exception:
+        log.exception("could not ensure the %s label exists", SKIP_LABEL)
     issues = gh.open_issues()
     log.info("%d open issue(s) to drain", len(issues))
 
@@ -167,9 +223,12 @@ def main():
                     "⚠️ Summarization failed; leaving this issue open.\n\n"
                     f"```\n{exc}\n```",
                 )
+                gh.add_label(issue["number"], SKIP_LABEL)
             except Exception:
-                log.exception("could not post error comment on #%s", issue["number"])
+                log.exception("could not mark #%s as failed", issue["number"])
 
+    if len(issues) - failures > 0:
+        sync_repo()
     log.info("done: %d ok, %d failed", len(issues) - failures, failures)
     return 1 if failures else 0
 
