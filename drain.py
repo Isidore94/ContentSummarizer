@@ -145,7 +145,9 @@ def main():
 
     token = _require_env("GITHUB_TOKEN")
     repo = _require_env("GITHUB_REPO")
-    _require_env("ANTHROPIC_API_KEY")  # consumed by pipeline via the environment
+    provider = os.environ.get("SUMMARY_PROVIDER", "openai").strip().lower()
+    # consumed by pipeline via the environment
+    _require_env("OPENAI_API_KEY" if provider == "openai" else "ANTHROPIC_API_KEY")
     force_whisper = os.environ.get("FORCE_WHISPER", "").lower() in {"1", "true", "yes"}
 
     gh = GitHub(token, repo)

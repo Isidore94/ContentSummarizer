@@ -18,11 +18,13 @@ import sys
 import tempfile
 
 from anthropic import Anthropic
+from openai import OpenAI
 
 log = logging.getLogger(__name__)
 
-# Model used for summarization — Haiku is fast and cheap, plenty for this.
-SUMMARY_MODEL = "claude-haiku-4-5"
+# Models used for summarization, one per provider — both fast and cheap.
+ANTHROPIC_SUMMARY_MODEL = "claude-haiku-4-5"
+OPENAI_SUMMARY_MODEL_DEFAULT = "gpt-4o-mini"
 
 # Local Whisper settings for the caption-less fallback path.
 WHISPER_MODEL = "large-v3"
@@ -216,20 +218,11 @@ TRANSCRIPT:
 """
 
 
-def summarize(transcript, api_key=None):
-    """Summarize a transcript with the Anthropic API; return the markdown body."""
-    if len(transcript) > MAX_TRANSCRIPT_CHARS:
-        log.warning(
-            "transcript is %d chars; trimming to %d before summarizing",
-            len(transcript),
-            MAX_TRANSCRIPT_CHARS,
-        )
-        transcript = transcript[:MAX_TRANSCRIPT_CHARS]
-
+def _summarize_anthropic(transcript, api_key):
     client = Anthropic(api_key=api_key) if api_key else Anthropic()
     try:
         response = client.messages.create(
-            model=SUMMARY_MODEL,
+            model=ANTHROPIC_SUMMARY_MODEL,
             max_tokens=1024,
             system=_SUMMARY_SYSTEM,
             messages=[
@@ -240,6 +233,48 @@ def summarize(transcript, api_key=None):
         raise PipelineError(f"Anthropic API call failed: {exc}") from exc
 
     return next((b.text for b in response.content if b.type == "text"), "").strip()
+
+
+def _summarize_openai(transcript, api_key):
+    model = os.environ.get("OPENAI_SUMMARY_MODEL", OPENAI_SUMMARY_MODEL_DEFAULT)
+    client = OpenAI(api_key=api_key) if api_key else OpenAI()
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            max_completion_tokens=1024,
+            messages=[
+                {"role": "system", "content": _SUMMARY_SYSTEM},
+                {"role": "user", "content": _SUMMARY_INSTRUCTIONS + transcript},
+            ],
+        )
+    except Exception as exc:  # openai.APIError and friends
+        raise PipelineError(f"OpenAI API call failed: {exc}") from exc
+
+    return (response.choices[0].message.content or "").strip()
+
+
+def summarize(transcript, api_key=None):
+    """Summarize a transcript; return the markdown body.
+
+    Provider is picked by the SUMMARY_PROVIDER env var ("openai" or
+    "anthropic"), read lazily so it honors .env values loaded after import.
+    """
+    if len(transcript) > MAX_TRANSCRIPT_CHARS:
+        log.warning(
+            "transcript is %d chars; trimming to %d before summarizing",
+            len(transcript),
+            MAX_TRANSCRIPT_CHARS,
+        )
+        transcript = transcript[:MAX_TRANSCRIPT_CHARS]
+
+    provider = os.environ.get("SUMMARY_PROVIDER", "openai").strip().lower()
+    if provider == "openai":
+        return _summarize_openai(transcript, api_key)
+    if provider == "anthropic":
+        return _summarize_anthropic(transcript, api_key)
+    raise PipelineError(
+        f"Unknown SUMMARY_PROVIDER {provider!r}; expected 'openai' or 'anthropic'"
+    )
 
 
 def summarize_video(url, force_whisper=False, api_key=None):

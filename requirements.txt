@@ -4,7 +4,8 @@ yt-dlp
 # Local GPU transcription fallback (RTX 3080 Ti / CUDA)
 faster-whisper
 
-# Anthropic API (summarization with claude-haiku-4-5)
+# Summarization — OpenAI (default) and Anthropic (alternate via SUMMARY_PROVIDER)
+openai
 anthropic
 
 # .env loading
