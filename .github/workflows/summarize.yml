@@ -42,7 +42,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPO: ${{ github.repository }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Accept either name: OPENAI_API_KEY (preferred) or OPEN_API_KEY
+          # (tolerated so a common typo in the secret name still works).
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.OPEN_API_KEY }}
           SUMMARY_PROVIDER: openai
           TRANSCRIBE_BACKEND: openai
         run: python drain.py
