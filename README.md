@@ -157,9 +157,14 @@ GPU needed:
   summarizes videos as they arrive.
 - **Dashboard**: a LAN web UI on port 8787 — queue view, paste-a-URL box,
   *Drain now*, per-video *Retry*, and browsable/searchable summaries.
-- **Transcription without a GPU**: caption-less videos go through the OpenAI
-  audio API when `TRANSCRIBE_BACKEND=openai` (the default); set `local` to use
-  faster-whisper on CUDA instead.
+- **Transcription without a GPU**: with `TRANSCRIBE_BACKEND=auto` (the
+  default), caption-less videos use the desktop's GPU node (`gpu_node.py`,
+  below) whenever that PC is on, else the OpenAI audio API. `openai`, `local`
+  (CUDA faster-whisper), and `remote` pin a specific backend.
+- **Borrowable GPU**: run `gpu_node.py` on the PC with the CUDA GPU and set
+  `GPU_NODE_URL` — the worker borrows that GPU whenever the machine is
+  powered on. The dashboard shows the node online/offline and can pin the
+  mode (Auto / OpenAI API / GPU PC).
 - **Failure handling**: failed videos get the `summarize-failed` label and are
   retried after `RETRY_FAILED_HOURS` (default 24), or immediately via the
   dashboard's Retry button. A manual `python drain.py` retries everything.

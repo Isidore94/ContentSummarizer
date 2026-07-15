@@ -34,7 +34,9 @@ here — move it privately (USB stick, RDP copy/paste); never commit or email
 it.
 
 One edit after copying: remove (or blank) the `TRANSCRIBE_BACKEND=local` line.
-The mini PC has no CUDA GPU, so it should use the default `openai` backend.
+The mini PC has no CUDA GPU, so it should use the default `auto` backend:
+prefer the desktop's GPU node when the desktop is on (`GPU_NODE_URL` is
+already in the copied `.env`), otherwise the OpenAI audio API.
 
 ## 4. Test drive
 
@@ -74,7 +76,44 @@ Notes:
   a power cut or reboot.
 - Start it immediately without rebooting: `Start-ScheduledTask -TaskName ContentSummarizerWorker`
 
-## 6. Turn off the desktop's 6 pm task
+## 6. Optional: lend the desktop's GPU when it's on
+
+The desktop (MAINPC) can serve its RTX 3080 Ti to the mini PC's worker as a
+transcription service. With `TRANSCRIBE_BACKEND=auto` (the mini PC default),
+caption-less videos use the desktop GPU for free whenever the desktop is
+powered on, and fall back to the OpenAI audio API when it isn't. The
+dashboard shows the GPU PC as online/offline and has an Auto / OpenAI API /
+GPU PC switch.
+
+On the **desktop**, run the node once interactively to accept the firewall
+prompt (choose *private networks*):
+
+```powershell
+cd d:\ContentSummarizer
+.venv\Scripts\python.exe gpu_node.py    # Ctrl+C after accepting the prompt
+```
+
+Then register it to start at logon:
+
+```powershell
+$repo = "d:\ContentSummarizer"
+$action = New-ScheduledTaskAction -Execute "$repo\.venv\Scripts\pythonw.exe" `
+                                  -Argument "gpu_node.py" `
+                                  -WorkingDirectory $repo
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
+    -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
+    -ExecutionTimeLimit ([TimeSpan]::Zero)
+Register-ScheduledTask -TaskName "ContentSummarizerGPUNode" `
+    -Action $action -Trigger $trigger -Settings $settings
+Start-ScheduledTask -TaskName ContentSummarizerGPUNode
+```
+
+Logs go to `gpu_node.log` in the repo. If `http://MAINPC:8788` doesn't resolve
+from the mini PC, use the desktop's IP address in `GPU_NODE_URL` instead
+(`ipconfig` on the desktop; consider a DHCP reservation in your router).
+
+## 7. Turn off the desktop's 6 pm task
 
 Once the mini PC worker is confirmed running, on the **desktop** run:
 

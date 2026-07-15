@@ -75,6 +75,12 @@ form.inline { display: inline; margin-left: 6px; }
 form.inline button { padding: 2px 10px; font-size: 12px; background: #64748b; }
 .badge { border-radius: 6px; padding: 1px 8px; font-size: 12px; margin-left: 6px; }
 .badge.fail { background: #dc2626; color: #fff; }
+.badge.on { background: #16a34a; color: #fff; }
+.badge.off { background: #6b7280; color: #fff; }
+.seg { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.seg form { display: inline; }
+.seg button { background: #64748b; padding: 4px 12px; font-size: 13px; }
+.seg button.active { background: #2563eb; }
 ul { padding-left: 20px; margin: 6px 0; }
 li { margin: 7px 0; }
 a { color: #2563eb; text-decoration: none; }
@@ -188,18 +194,44 @@ def home():
     provider = os.environ.get("SUMMARY_PROVIDER", "openai")
     backend = os.environ.get(
         "TRANSCRIBE_BACKEND", pipeline.TRANSCRIBE_BACKEND_DEFAULT
+    ).strip().lower()
+
+    gpu_html = ""
+    if pipeline._gpu_node_url():
+        online = pipeline.gpu_node_online()
+        gpu_badge = (
+            '<span class="badge on">online</span>'
+            if online
+            else '<span class="badge off">offline</span>'
+        )
+        gpu_html = f"<span><b>GPU PC:</b> {gpu_badge}</span>"
+
+    seg = []
+    for value, label in (("auto", "Auto"), ("openai", "OpenAI API"), ("remote", "GPU PC")):
+        active = " active" if backend == value else ""
+        seg.append(
+            f'<form method="post" action="/settings/transcribe">'
+            f'<input type="hidden" name="mode" value="{value}">'
+            f'<button class="{active.strip()}">{label}</button></form>'
+        )
+    seg_html = (
+        f'<div class="seg"><span class="muted">Transcription:</span>{"".join(seg)}'
+        '<span class="muted">(resets to .env on restart)</span></div>'
     )
+
     body = f"""
 <div class="card">
   <div class="status-line">
     <span><b>State:</b> {html.escape(str(s["state"]))}</span>
     <span><b>Last poll:</b> {_ago(s["last_poll"])} ({html.escape(s["last_result"] or "—")})</span>
     <span><b>Lifetime:</b> {s["ok_total"]} ok / {s["failed_total"]} failed</span>
+    {gpu_html}
   </div>
-  <p class="muted">summaries via {html.escape(provider)} · transcription fallback: {html.escape(backend)} · polling every {worker.poll_seconds}s</p>
-  <form class="inline" method="post" action="/drain" style="margin-left:0">
+  <p class="muted">summaries via {html.escape(provider)} · polling every {worker.poll_seconds}s</p>
+  {seg_html}
+  <p style="margin-bottom:0"><form class="inline" method="post" action="/drain" style="margin-left:0">
     <button>Drain now</button>
-  </form>
+  </form></p>
 </div>
 
 <h2>Add a video</h2>
@@ -304,6 +336,18 @@ def queue_video(url: str = Form(...)):
 @app.post("/drain")
 def drain_now():
     worker.request_drain()
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/settings/transcribe")
+def set_transcribe_mode(mode: str = Form(...)):
+    mode = mode.strip().lower()
+    if mode in {"auto", "openai", "remote"}:
+        # pipeline.transcribe() reads the env on every call, and the worker
+        # thread shares this process — so this takes effect immediately.
+        # It is not persisted; .env wins again after a restart.
+        os.environ["TRANSCRIBE_BACKEND"] = mode
+        log.info("transcription mode set to %s", mode)
     return RedirectResponse("/", status_code=303)
 
 

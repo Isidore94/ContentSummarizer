@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 
+import requests
 from anthropic import Anthropic
 from openai import OpenAI
 
@@ -32,9 +33,12 @@ WHISPER_MODEL = "large-v3"
 WHISPER_DEVICE = "cuda"
 WHISPER_COMPUTE_TYPE = "float16"
 
-# Transcription fallback backend for caption-less videos: "openai" (audio API,
-# no GPU needed — the default) or "local" (faster-whisper on CUDA, above).
-TRANSCRIBE_BACKEND_DEFAULT = "openai"
+# Transcription fallback backend for caption-less videos:
+#   "auto"   — GPU node (below) when reachable, else the OpenAI audio API
+#   "openai" — OpenAI audio API (no GPU needed)
+#   "local"  — faster-whisper on this machine's CUDA GPU
+#   "remote" — a gpu_node.py instance at GPU_NODE_URL (fail if unreachable)
+TRANSCRIBE_BACKEND_DEFAULT = "auto"
 OPENAI_TRANSCRIBE_MODEL_DEFAULT = "whisper-1"
 
 # The OpenAI audio API rejects uploads over 25 MB; we transcode down to mono
@@ -279,18 +283,73 @@ def transcribe_openai(url):
         return text
 
 
+def _gpu_node_url():
+    return os.environ.get("GPU_NODE_URL", "").strip().rstrip("/")
+
+
+def _gpu_node_headers():
+    token = os.environ.get("GPU_NODE_TOKEN", "").strip()
+    return {"X-Node-Token": token} if token else {}
+
+
+def gpu_node_online():
+    """True when a gpu_node.py instance is reachable at GPU_NODE_URL."""
+    url = _gpu_node_url()
+    if not url:
+        return False
+    try:
+        return requests.get(
+            f"{url}/health", headers=_gpu_node_headers(), timeout=1.5
+        ).ok
+    except requests.RequestException:
+        return False
+
+
+def transcribe_remote(url):
+    """Transcribe by delegating to a gpu_node.py instance on the LAN."""
+    node = _gpu_node_url()
+    if not node:
+        raise PipelineError("TRANSCRIBE_BACKEND=remote but GPU_NODE_URL is not set")
+    log.info("transcribing via GPU node %s", node)
+    try:
+        resp = requests.post(
+            f"{node}/transcribe",
+            json={"url": url},
+            headers=_gpu_node_headers(),
+            timeout=(5, 3600),  # transcription of long videos takes a while
+        )
+    except requests.RequestException as exc:
+        raise PipelineError(f"GPU node request failed: {exc}") from exc
+    if resp.status_code != 200:
+        raise PipelineError(f"GPU node error ({resp.status_code}): {resp.text[:500]}")
+    text = (resp.json().get("text") or "").strip()
+    if not text:
+        raise PipelineError("GPU node returned an empty transcript")
+    return text
+
+
 def transcribe(url):
     """Transcribe a video's audio using the configured fallback backend."""
     backend = os.environ.get(
         "TRANSCRIBE_BACKEND", TRANSCRIBE_BACKEND_DEFAULT
     ).strip().lower()
+    if backend == "auto":
+        if gpu_node_online():
+            backend = "remote"
+        else:
+            if _gpu_node_url():
+                log.info("GPU node offline; using the OpenAI audio API")
+            backend = "openai"
+    if backend == "remote":
+        return transcribe_remote(url)
     if backend == "openai":
         log.info("transcribing via the OpenAI audio API")
         return transcribe_openai(url)
     if backend == "local":
         return transcribe_local(url)
     raise PipelineError(
-        f"Unknown TRANSCRIBE_BACKEND {backend!r}; expected 'openai' or 'local'"
+        f"Unknown TRANSCRIBE_BACKEND {backend!r}; "
+        "expected 'auto', 'openai', 'local', or 'remote'"
     )
 
 
