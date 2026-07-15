@@ -12,7 +12,7 @@ the URL as the issue title → confirmation banner.
 ## The GitHub endpoint
 
 ```
-POST https://api.github.com/repos/{OWNER}/{REPO}/issues
+POST https://api.github.com/repos/Isidore94/ContentSummarizer/issues
 ```
 
 Headers:
@@ -54,8 +54,7 @@ JSON body:
       This becomes the issue title. *(Optional: use a "Get URLs from Input"
       action first to make sure you pass a clean URL string.)*
    3. **Get Contents of URL** — configure:
-      - **URL:** `https://api.github.com/repos/{OWNER}/{REPO}/issues`
-        (replace `{OWNER}/{REPO}`, e.g. `Isidore94/ContentSummarizer`).
+      - **URL:** `https://api.github.com/repos/Isidore94/ContentSummarizer/issues`
       - **Method:** `POST`
       - **Headers:** add the four headers from the table above (put your token
         in the `Authorization` value as `Bearer ghp_...`).
@@ -74,7 +73,7 @@ curl -X POST \
   -H "Authorization: Bearer $GITHUB_TOKEN" \
   -H "Accept: application/vnd.github+json" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
-  https://api.github.com/repos/OWNER/REPO/issues \
+  https://api.github.com/repos/Isidore94/ContentSummarizer/issues \
   -d '{"title":"https://www.youtube.com/watch?v=VIDEO_ID"}'
 ```
 
