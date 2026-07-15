@@ -157,6 +157,8 @@ def sanitize_title(title):
 def sync_repo():
     """Fast-forward the local clone so summaries committed via the API land on
     disk too (the dashboard reads them from the working tree)."""
+    if os.environ.get("GITHUB_ACTIONS"):
+        return  # cloud runner: nothing local to sync, and HEAD is detached
     try:
         proc = subprocess.run(
             ["git", "pull", "--ff-only"],

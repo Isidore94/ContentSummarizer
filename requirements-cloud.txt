@@ -1,0 +1,9 @@
+# Slim dependency set for the GitHub Actions cloud runner (.github/workflows/
+# summarize.yml). No GPU stack — cloud runners have no CUDA, so caption-less
+# videos use the OpenAI audio API (TRANSCRIBE_BACKEND=openai). This keeps the
+# install fast (no torch / faster-whisper / nvidia-* wheels).
+yt-dlp
+openai
+anthropic
+python-dotenv
+requests

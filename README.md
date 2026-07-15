@@ -148,6 +148,28 @@ Register-ScheduledTask -TaskName "ContentSummarizer" `
 > task"*. Together they ensure the queue drains on the next wake even if the
 > desktop was asleep at 6pm.
 
+## Running modes
+
+There are three ways to drain the queue — pick one (don't run more than one, or
+they'll double-process):
+
+1. **Cloud (event-driven, serverless)** — GitHub Actions summarizes each video
+   the moment its issue is opened. Nothing at home runs. See
+   **[SETUP_CLOUD.md](SETUP_CLOUD.md)**.
+2. **Always-on mini PC** (below) — a local worker + LAN dashboard, with an
+   optional borrowable GPU. See **[SETUP_MINI_PC.md](SETUP_MINI_PC.md)**.
+3. **Scheduled desktop task** — the original once-a-day drain (README's Task
+   Scheduler section).
+
+## Cloud mode (GitHub Actions)
+
+The most hands-off option: [.github/workflows/summarize.yml](.github/workflows/summarize.yml)
+runs `drain.py` on a GitHub-hosted runner whenever an issue is opened
+(and once daily as a backstop). Transcription of caption-less videos uses the
+OpenAI audio API (no GPU in the cloud). Setup is three GitHub settings — add
+the `OPENAI_API_KEY` secret, allow write permissions, done. Full guide:
+**[SETUP_CLOUD.md](SETUP_CLOUD.md)**.
+
 ## Always-on mode (mini PC + dashboard)
 
 Instead of the daily 6 pm task, run `dashboard.py` on any always-on box — no
