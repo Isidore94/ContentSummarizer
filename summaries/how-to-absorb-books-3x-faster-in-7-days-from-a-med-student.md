@@ -2,16 +2,16 @@
 
 <https://www.youtube.com/watch?v=vge9LQIV1bg>
 
-**TL;DR:** Salim shares the "triforce method" to drastically improve reading speed and comprehension for students and avid readers.
+**TL;DR:** Salim shares three strategies to significantly increase reading speed and comprehension, termed the triforce method.
 
 **Key points**
-- **Baseline Speed:** Eliminate internal monologue using tools like Spreeder to read visually, increasing speed by at least 50%.
-- **Visual Tracking:** Use a finger or pen as a tracker to maintain smooth eye movement, boosting speed by an additional 100 words per minute.
-- **Reading Strategy:** Apply the 80/20 rule to focus on the most valuable content, slowing down for key information when necessary.
-- **Summarization:** End each page with a summary to enhance comprehension and retention of information.
-- **Consolidation:** Take actionable steps based on readings, especially for non-fiction, to ensure learning translates into behavior change.
+- Remove the internal monologue while reading to increase speed.
+- Use a visual tracker, like a finger or pen, to keep eyes moving smoothly.
+- Apply the 80/20 rule to focus on key information in non-fiction books.
+- Summarize key points after each page to enhance retention.
+- Take actionable steps from what you read to ensure comprehension.
 
 **Notable claims & takeaways**
-- Starting reading speed of 250 words per minute can increase to over 500 with the triforce method.
-- Scoring in the top 1% on a medical school admissions exam was achieved by using these techniques. 
-- Summarizing and taking actionable steps are crucial for true comprehension and learning.
+- Salim increased his reading speed from 250 to over 500 words per minute.
+- Summarizing every page helps engage with the text and improves retention.
+- The importance of adapting reading techniques based on content to absorb relevant information.
