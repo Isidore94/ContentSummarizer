@@ -1,5 +1,12 @@
 # Cloud mode — summarize in GitHub Actions (no home machine)
 
+> ⚠️ **Heads up:** GitHub-hosted runners use datacenter IPs that YouTube often
+> blocks with *"Sign in to confirm you're not a bot,"* so many videos fail
+> unless you add cookies (see the "Known limitation" section below). For a
+> more reliable event-driven setup that runs from your home IP, use a
+> self-hosted runner instead — **[SETUP_SELF_HOSTED.md](SETUP_SELF_HOSTED.md)**.
+
+
 Event-driven, fully serverless. When a YouTube link is added to the queue (an
 issue is opened — e.g. by the iOS Shortcut), GitHub Actions runs `drain.py` on
 a hosted runner: it summarizes the video, commits the markdown to

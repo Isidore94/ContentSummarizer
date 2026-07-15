@@ -150,15 +150,20 @@ Register-ScheduledTask -TaskName "ContentSummarizer" `
 
 ## Running modes
 
-There are three ways to drain the queue — pick one (don't run more than one, or
-they'll double-process):
+There are several ways to drain the queue — pick one (don't run more than one,
+or they'll double-process):
 
-1. **Cloud (event-driven, serverless)** — GitHub Actions summarizes each video
-   the moment its issue is opened. Nothing at home runs. See
+1. **Self-hosted runner (event-driven, home IP)** — GitHub fires the workflow
+   the moment an issue is opened, but the job runs on a runner on a home PC,
+   so yt-dlp uses your home IP and can use the local GPU. **Recommended.** See
+   **[SETUP_SELF_HOSTED.md](SETUP_SELF_HOSTED.md)**.
+2. **Cloud (event-driven, serverless)** — GitHub Actions summarizes on hosted
+   runners; nothing at home runs. Simple, but YouTube blocks GitHub's
+   datacenter IPs for many videos (needs cookies). See
    **[SETUP_CLOUD.md](SETUP_CLOUD.md)**.
-2. **Always-on mini PC** (below) — a local worker + LAN dashboard, with an
-   optional borrowable GPU. See **[SETUP_MINI_PC.md](SETUP_MINI_PC.md)**.
-3. **Scheduled desktop task** — the original once-a-day drain (README's Task
+3. **Always-on mini PC** — a local worker + LAN dashboard, with an optional
+   borrowable GPU. See **[SETUP_MINI_PC.md](SETUP_MINI_PC.md)**.
+4. **Scheduled desktop task** — the original once-a-day drain (README's Task
    Scheduler section).
 
 ## Cloud mode (GitHub Actions)
