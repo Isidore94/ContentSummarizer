@@ -2,15 +2,16 @@
 
 <https://www.youtube.com/watch?v=vge9LQIV1bg>
 
-**TL;DR:** Salim shares the "triforce method" to significantly enhance reading speed and comprehension using three effective strategies.
+**TL;DR:** Salim shares the triforce method, a strategy to significantly increase reading speed and retention.
 
 **Key points**
-- Remove internal monologue to increase reading speed; tools like Spreeder can help.
-- Use a visual tracker to maintain smooth eye movement and prevent regression while reading.
-- Apply the 80/20 rule to identify essential information in non-fiction books and adjust reading speed accordingly.
-- Summarize and consolidate information after reading to enhance retention and action on the material.
+- Improve reading speed by removing internal monologue using tools like Spreeder.
+- Use a visual tracker to maintain a consistent reading pace and minimize backtracking.
+- Apply the 80/20 rule to focus on key information while reading non-fiction.
+- Summarize key points after each page to enhance comprehension and retention.
+- Consolidate learning by taking actionable steps based on what you've read.
 
 **Notable claims & takeaways**
-- Salim improved his reading speed from 250 to over 500 words per minute using these methods.
-- Retention of information is significantly improved by summarizing content into one or two lines after each page. 
-- Taking action on what you've read is crucial to ensure actual learning occurs.
+- Reading speed can improve from 250 to over 500 words per minute using suggested techniques.
+- 80% of valuable insights in non-fiction books often come from just 20% of the content.
+- Summarizing and taking action on gained knowledge is essential for true learning and retention.
