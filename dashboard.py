@@ -48,13 +48,26 @@ NO_WORKER = os.environ.get("DASHBOARD_NO_WORKER", "").strip().lower() in {
     "yes",
 }
 
+# Keep the local summaries/ folder in sync with the repo so the reader always
+# shows the latest — summaries are committed via the GitHub API, so a plain
+# `git pull` brings them to disk. (No-op when there's nothing to fetch.)
+SUMMARY_PULL_SECONDS = int(os.environ.get("SUMMARY_PULL_SECONDS") or 60)
+
 worker: Worker | None = None
+
+
+def _pull_loop():
+    while True:
+        time.sleep(SUMMARY_PULL_SECONDS)
+        drain.sync_repo()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global worker
     worker = Worker()
+    drain.sync_repo()  # refresh summaries on startup
+    threading.Thread(target=_pull_loop, daemon=True, name="summary-pull").start()
     if NO_WORKER:
         worker._set(state="viewer mode (an external runner drains the queue)")
     else:
@@ -411,11 +424,36 @@ def main():
 
     host = os.environ.get("DASHBOARD_HOST", "0.0.0.0")
     port = int(os.environ.get("DASHBOARD_PORT") or 8787)
-    log.info("dashboard starting on http://%s:%d", host, port)
+
+    lan = _lan_ip()
+    mode = "viewer (external drainer)" if NO_WORKER else "worker + web UI"
+    print(
+        "\n  ContentSummarizer server\n"
+        f"    mode:  {mode}\n"
+        f"    local: http://localhost:{port}\n"
+        f"    LAN:   http://{lan}:{port}   (open this on your phone)\n"
+        "    Ctrl+C to stop.\n",
+        flush=True,
+    )
+    log.info("server starting on http://%s:%d (%s)", host, port, mode)
 
     import uvicorn
 
     uvicorn.run(app, host=host, port=port, log_config=None)
+
+
+def _lan_ip():
+    """Best-effort local network IP for the startup banner."""
+    import socket
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return "127.0.0.1"
 
 
 if __name__ == "__main__":

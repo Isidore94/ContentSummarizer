@@ -153,18 +153,40 @@ Register-ScheduledTask -TaskName "ContentSummarizer" `
 There are several ways to drain the queue — pick one (don't run more than one,
 or they'll double-process):
 
-1. **Self-hosted runner (event-driven, home IP)** — GitHub fires the workflow
-   the moment an issue is opened, but the job runs on a runner on a home PC,
-   so yt-dlp uses your home IP and can use the local GPU. **Recommended.** See
-   **[SETUP_SELF_HOSTED.md](SETUP_SELF_HOSTED.md)**.
-2. **Cloud (event-driven, serverless)** — GitHub Actions summarizes on hosted
-   runners; nothing at home runs. Simple, but YouTube blocks GitHub's
-   datacenter IPs for many videos (needs cookies). See
-   **[SETUP_CLOUD.md](SETUP_CLOUD.md)**.
-3. **Always-on mini PC** — a local worker + LAN dashboard, with an optional
-   borrowable GPU. See **[SETUP_MINI_PC.md](SETUP_MINI_PC.md)**.
-4. **Scheduled desktop task** — the original once-a-day drain (README's Task
-   Scheduler section).
+1. **Local server — `python serve.py`** — the recommended, self-contained
+   option. One command runs a worker that polls the queue and summarizes each
+   video (from your home IP, using the local GPU when available) **plus** a web
+   dashboard. Packages into a single `.exe` later. See below.
+2. **Self-hosted runner (event-driven, home IP)** — GitHub fires the workflow
+   on issue-open; the job runs on a runner on a home PC. Instant (~3 s) but not
+   a standalone script. See **[SETUP_SELF_HOSTED.md](SETUP_SELF_HOSTED.md)**.
+3. **Cloud (event-driven, serverless)** — GitHub Actions on hosted runners;
+   nothing at home runs, but YouTube blocks GitHub's datacenter IPs for many
+   videos (needs cookies). See **[SETUP_CLOUD.md](SETUP_CLOUD.md)**.
+4. **Always-on mini PC** / **Scheduled desktop task** — see the mini-PC guide
+   and the Task Scheduler section.
+
+## Local server (`serve.py`) — recommended
+
+```powershell
+.venv\Scripts\python.exe serve.py
+```
+
+One process does everything:
+
+- **Worker** polls the GitHub Issues queue every `POLL_INTERVAL_SECONDS`
+  (default 30) and summarizes new videos — captions via yt-dlp from your home
+  IP (no bot-block), caption-less via the local GPU (`TRANSCRIBE_BACKEND=local`)
+  or the OpenAI audio API.
+- **Dashboard** at `http://<this-pc>:8787` — queue view, paste-a-URL box,
+  *Drain now*, per-video *Retry*, and a searchable summary reader that
+  auto-syncs from the repo.
+- Startup prints the local + LAN URLs. Stop with Ctrl+C.
+- Later, bundle it: `pyinstaller --onefile serve.py` → `dist\serve.exe`.
+
+To keep it running across reboots, add `serve.py` to a startup shortcut (same
+idea as [SETUP_SELF_HOSTED.md](SETUP_SELF_HOSTED.md)'s runner shortcut) or run
+it as a service.
 
 ## Cloud mode (GitHub Actions)
 
@@ -177,8 +199,8 @@ the `OPENAI_API_KEY` secret, allow write permissions, done. Full guide:
 
 ## Always-on mode (mini PC + dashboard)
 
-Instead of the daily 6 pm task, run `dashboard.py` on any always-on box — no
-GPU needed:
+The local server above (`serve.py`) is the same worker + dashboard; run it on
+any always-on box (e.g. a mini PC) — no GPU needed:
 
 - **Worker**: polls the queue every `POLL_INTERVAL_SECONDS` (default 120) and
   summarizes videos as they arrive.

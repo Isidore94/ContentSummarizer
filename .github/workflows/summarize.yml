@@ -7,12 +7,15 @@ name: Summarize queued videos
 # .env, so no per-run installs and no repo secrets are needed — and it can use
 # the local GPU (TRANSCRIBE_BACKEND=local in .env) for caption-less videos.
 
+# INACTIVE by default — the self-contained server (serve.py) is now the queue
+# drainer. To switch back to event-driven mode, uncomment the issues/schedule
+# triggers below and run a self-hosted runner (see SETUP_SELF_HOSTED.md).
 on:
-  issues:
-    types: [opened, reopened]
   workflow_dispatch: {}
-  schedule:
-    - cron: "0 7 * * *"       # daily backstop (runs when the runner is online)
+  # issues:
+  #   types: [opened, reopened]
+  # schedule:
+  #   - cron: "0 7 * * *"
 
 # Never run two drains at once (drain.py processes every open issue).
 concurrency:
