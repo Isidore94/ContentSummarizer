@@ -153,14 +153,17 @@ def _ago(ts):
 
 def _summary_title(text):
     for line in text.splitlines():
-        if line.startswith("# "):
-            return line[2:].strip()
+        line = line.strip()
+        if line:
+            return line[2:].strip() if line.startswith("# ") else line
     return None
 
 
 def _summary_files():
+    files = glob.glob(os.path.join(SUMMARY_DIR, "*.txt"))
+    files.extend(glob.glob(os.path.join(SUMMARY_DIR, "*.md")))
     return sorted(
-        glob.glob(os.path.join(SUMMARY_DIR, "*.md")),
+        files,
         key=os.path.getmtime,
         reverse=True,
     )
@@ -301,14 +304,21 @@ def home():
 def summary_page(stem: str):
     if not _STEM_RE.match(stem):
         return HTMLResponse("Bad name", status_code=400)
-    path = os.path.join(SUMMARY_DIR, stem + ".md")
+    txt_path = os.path.join(SUMMARY_DIR, stem + ".txt")
+    md_path = os.path.join(SUMMARY_DIR, stem + ".md")
+    path = txt_path if os.path.isfile(txt_path) else md_path
     if not os.path.isfile(path):
         return HTMLResponse(
             _page("Not found", '<p>No such summary.</p><p><a href="/">← back</a></p>'),
             status_code=404,
         )
     text = open(path, encoding="utf-8").read()
-    body = md.markdown(text, extensions=["extra"])
+    if path.endswith(".txt"):
+        body = f'<pre style="white-space:pre-wrap">{html.escape(text)}</pre>'
+    else:
+        # Model output is untrusted; escaping first prevents raw-HTML/script
+        # injection while retaining the useful Markdown structure.
+        body = md.markdown(html.escape(text), extensions=["extra"])
     return _page(
         _summary_title(text) or stem,
         f'<p><a href="/">← back</a></p><article class="prose">{body}</article>',

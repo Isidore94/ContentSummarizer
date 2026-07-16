@@ -16,3 +16,7 @@ env/
 
 # worker/dashboard logs
 *.log
+
+# PyInstaller output
+build/
+dist/

@@ -1,4 +1,15 @@
-# Mini PC setup — always-on worker + dashboard
+# Mini PC setup — desktop executable
+
+The recommended setup is now the Windows GUI executable. Build it with
+`build_exe.ps1`, then follow **[EXE_SETUP.md](EXE_SETUP.md)**. The app listens to
+the same GitHub Issues queue, saves `.txt` summaries in a folder selected from
+the GUI (including Google Drive for desktop folders), and supports Simple,
+Detailed, and Complex summaries.
+
+The source-based worker/dashboard instructions below remain available as a
+legacy/headless alternative.
+
+## Legacy source-based worker + dashboard
 
 Goal: the mini PC continuously drains the queue (summaries land ~2 minutes
 after you share from your phone) and serves a LAN dashboard, so the main

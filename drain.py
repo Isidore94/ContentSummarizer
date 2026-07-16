@@ -2,7 +2,7 @@
 
 Run by Windows Task Scheduler. Lists open issues in the configured repo (each
 issue TITLE is a YouTube URL), runs the summarization pipeline on each, commits
-the resulting markdown to summaries/, pastes the summary as a closing comment,
+the resulting plain text to summaries/, pastes it as a closing comment,
 and closes the issue. A video that fails is logged and left open (so it isn't
 lost) with the error posted as a comment, and the batch continues.
 """
@@ -15,22 +15,32 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
 
 import pipeline
+from app_config import executable_dir, normalize_detail
 
 log = logging.getLogger("drain")
 
 GITHUB_API = "https://api.github.com"
 SUMMARY_DIR = "summaries"
-REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_DIR = str(executable_dir())
 
 # Label put on issues that failed to process. The always-on worker skips
 # labeled issues until its retry window elapses (or the label is removed via
 # the dashboard's Retry button); a manual `python drain.py` retries them all.
 SKIP_LABEL = "summarize-failed"
+
+
+def failure_message(exc, limit=1500):
+    """Bound error text before posting it to an issue comment."""
+    text = " ".join(str(exc).strip().splitlines()).replace("```", "'''")
+    if len(text) > limit:
+        text = text[: limit - 1] + "…"
+    return text or type(exc).__name__
 
 
 def _require_env(name):
@@ -142,6 +152,16 @@ class GitHub:
             payload["sha"] = sha
         self._request("PUT", f"contents/{path}", json=payload)
 
+    def files_in_directory(self, path):
+        """List repository files in a directory through the Contents API."""
+        return self._request("GET", f"contents/{path}").json()
+
+    def file_content(self, path):
+        """Return a repository file as decoded UTF-8 text."""
+        payload = self._request("GET", f"contents/{path}").json()
+        encoded = (payload.get("content") or "").replace("\n", "")
+        return base64.b64decode(encoded).decode("utf-8")
+
 
 _SLUG_STRIP = re.compile(r"[^\w\s-]")
 _SLUG_SPACE = re.compile(r"[\s_-]+")
@@ -154,10 +174,48 @@ def sanitize_title(title):
     return slug[:80].strip("-") or "summary"
 
 
+def summary_filename(title, video_id=None, issue_number=None):
+    """Return a readable, collision-resistant .txt filename."""
+    identity = re.sub(r"[^A-Za-z0-9_-]", "", video_id or "")
+    if not identity and issue_number is not None:
+        identity = f"issue-{issue_number}"
+    suffix = f"--{identity}" if identity else ""
+    return f"{sanitize_title(title)}{suffix}.txt"
+
+
+def write_summary(output_dir, filename, content):
+    """Atomically save a summary in the user-selected local/Drive folder."""
+    directory = Path(output_dir).expanduser()
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / filename
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, target)
+    return target
+
+
+def import_repository_summaries(gh, output_dir):
+    """Copy existing repo summaries to a local/Drive folder as .txt files."""
+    imported = 0
+    for item in gh.files_in_directory(SUMMARY_DIR):
+        name = item.get("name", "")
+        if item.get("type") != "file" or not name.lower().endswith((".md", ".txt")):
+            continue
+        filename = f"{Path(name).stem}.txt"
+        if (Path(output_dir).expanduser() / filename).exists():
+            continue
+        content = gh.file_content(item["path"])
+        write_summary(output_dir, filename, content)
+        imported += 1
+    return imported
+
+
 def sync_repo():
     """Fast-forward the local clone so summaries committed via the API land on
     disk too (the dashboard reads them from the working tree)."""
-    if os.environ.get("GITHUB_ACTIONS"):
+    if os.environ.get("GITHUB_ACTIONS") or not os.path.isdir(
+        os.path.join(REPO_DIR, ".git")
+    ):
         return  # cloud runner: nothing local to sync, and HEAD is detached
     try:
         proc = subprocess.run(
@@ -173,21 +231,37 @@ def sync_repo():
         log.warning("git pull failed: %s", exc)
 
 
-def process_issue(gh, issue, force_whisper):
+def process_issue(gh, issue, force_whisper, *, detail=None, output_dir=None):
     """Summarize one issue's video, commit it, comment, and close the issue."""
     number = issue["number"]
-    url = issue["title"].strip()
+    url = pipeline.validate_youtube_url(issue["title"])
     log.info("issue #%s: %s", number, url)
 
-    result = pipeline.summarize_video(url, force_whisper=force_whisper)
-    path = f"{SUMMARY_DIR}/{sanitize_title(result['title'])}.md"
+    detail = normalize_detail(detail or os.environ.get("SUMMARY_DETAIL", "simple"))
+    result = pipeline.summarize_video(
+        url,
+        force_whisper=force_whisper,
+        detail=detail,
+    )
+    filename = summary_filename(result["title"], result.get("id"), number)
+    repo_path = f"{SUMMARY_DIR}/{filename}"
+    destination = output_dir or os.environ.get("SUMMARY_FOLDER") or os.path.join(
+        REPO_DIR, SUMMARY_DIR
+    )
 
-    gh.commit_file(path, result["markdown"], f"Add summary: {result['title']}")
-    gh.comment(number, result["markdown"])
+    local_path = write_summary(destination, filename, result["text"])
+
+    gh.commit_file(
+        repo_path,
+        result["text"],
+        f"Add {detail} summary: {result['title']}",
+    )
+    gh.comment(number, result["text"])
     gh.close_issue(number)
     if any(l["name"] == SKIP_LABEL for l in issue.get("labels", [])):
         gh.remove_label(number, SKIP_LABEL)  # succeeded on retry
-    log.info("issue #%s done -> %s", number, path)
+    log.info("issue #%s done -> %s", number, local_path)
+    return {"result": result, "repo_path": repo_path, "local_path": str(local_path)}
 
 
 def main():
@@ -223,7 +297,7 @@ def main():
                 gh.comment(
                     issue["number"],
                     "⚠️ Summarization failed; leaving this issue open.\n\n"
-                    f"```\n{exc}\n```",
+                    f"```\n{failure_message(exc)}\n```",
                 )
                 gh.add_label(issue["number"], SKIP_LABEL)
             except Exception:
