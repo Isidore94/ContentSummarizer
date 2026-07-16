@@ -79,4 +79,4 @@ curl -X POST \
 
 A `201 Created` response means the video is queued. The next scheduled run of
 `drain.py` (or a manual `python drain.py`) will summarize it, commit the
-markdown, comment the summary, and close the issue.
+plain-text output, comment the summary, and close the issue.

@@ -9,7 +9,7 @@
 
 Event-driven, fully serverless. When a YouTube link is added to the queue (an
 issue is opened — e.g. by the iOS Shortcut), GitHub Actions runs `drain.py` on
-a hosted runner: it summarizes the video, commits the markdown to
+a hosted runner: it summarizes the video, commits the plain-text summary to
 `summaries/`, comments it on the issue, and closes it. Nothing at home needs
 to run.
 

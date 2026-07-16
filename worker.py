@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 import drain
+from app_config import normalize_detail
 
 log = logging.getLogger("worker")
 
@@ -38,7 +39,7 @@ def _updated_at(issue):
 class Worker:
     """Drain loop with shared status, wakeable from the dashboard."""
 
-    def __init__(self):
+    def __init__(self, *, summary_detail=None, output_dir=None, enabled=True):
         self.poll_seconds = int(
             os.environ.get("POLL_INTERVAL_SECONDS") or POLL_INTERVAL_DEFAULT
         )
@@ -52,14 +53,25 @@ class Worker:
         }
         self.gh = drain.GitHub(os.environ["GITHUB_TOKEN"], os.environ["GITHUB_REPO"])
         self.wake = threading.Event()
+        self._stop = threading.Event()
+        self._enabled = threading.Event()
+        if enabled:
+            self._enabled.set()
         self._lock = threading.Lock()
         self._label_ready = False
+        self.summary_detail = normalize_detail(
+            summary_detail or os.environ.get("SUMMARY_DETAIL", "simple")
+        )
+        self.output_dir = output_dir or os.environ.get("SUMMARY_FOLDER")
         self.status = {
             "state": "starting",
             "last_poll": None,
             "last_result": "",
             "ok_total": 0,
             "failed_total": 0,
+            "listening": enabled,
+            "summary_detail": self.summary_detail,
+            "output_dir": self.output_dir or "",
         }
 
     def snapshot(self):
@@ -72,6 +84,30 @@ class Worker:
 
     def request_drain(self):
         """Wake the loop immediately (dashboard 'Drain now' / new queue item)."""
+        self.wake.set()
+
+    def configure(self, *, summary_detail=None, output_dir=None):
+        with self._lock:
+            if summary_detail is not None:
+                self.summary_detail = normalize_detail(summary_detail)
+                self.status["summary_detail"] = self.summary_detail
+            if output_dir is not None:
+                self.output_dir = str(output_dir)
+                self.status["output_dir"] = self.output_dir
+
+    def resume(self):
+        self._enabled.set()
+        self._set(listening=True, state="starting")
+        self.wake.set()
+
+    def pause(self):
+        """Pause future polls. The current video, if any, finishes safely."""
+        self._enabled.clear()
+        self._set(listening=False)
+        self.wake.set()
+
+    def stop(self):
+        self._stop.set()
         self.wake.set()
 
     def _due(self, issue):
@@ -100,7 +136,16 @@ class Worker:
         for issue in issues:
             self._set(state=f"processing #{issue['number']}")
             try:
-                drain.process_issue(self.gh, issue, self.force_whisper)
+                with self._lock:
+                    detail = self.summary_detail
+                    output_dir = self.output_dir
+                drain.process_issue(
+                    self.gh,
+                    issue,
+                    self.force_whisper,
+                    detail=detail,
+                    output_dir=output_dir,
+                )
                 ok += 1
             except Exception as exc:
                 failed += 1
@@ -109,7 +154,7 @@ class Worker:
                     self.gh.comment(
                         issue["number"],
                         "⚠️ Summarization failed; will retry later.\n\n"
-                        f"```\n{exc}\n```",
+                        f"```\n{drain.failure_message(exc)}\n```",
                     )
                     self.gh.add_label(issue["number"], drain.SKIP_LABEL)
                 except Exception:
@@ -124,7 +169,12 @@ class Worker:
             self.poll_seconds,
             self.retry_hours,
         )
-        while True:
+        while not self._stop.is_set():
+            if not self._enabled.is_set():
+                self._set(state="paused", listening=False)
+                self.wake.wait(1)
+                self.wake.clear()
+                continue
             self._set(state="draining")
             try:
                 ok, failed = self.run_once()
@@ -139,10 +189,12 @@ class Worker:
                 self.status["last_result"] = result
                 self.status["ok_total"] += ok
                 self.status["failed_total"] += failed
+                self.status["listening"] = True
             if result != "queue empty":
                 log.info("poll done: %s", result)
             self.wake.wait(self.poll_seconds)
             self.wake.clear()
+        self._set(state="stopped", listening=False)
 
 
 def main():

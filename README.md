@@ -1,9 +1,9 @@
 # ContentSummarizer
 
-A personal YouTube-to-summary batch pipeline. Drop YouTube links into this
-repo's **GitHub Issues** from your phone throughout the day; a scheduled job on
-your Windows desktop drains the queue, summarizes each video, and commits
-markdown back to the repo.
+A personal YouTube-to-summary pipeline. Drop YouTube links into this repo's
+**GitHub Issues** from your phone; the Windows desktop app listens to the queue,
+summarizes each video, saves a plain-text copy in a folder you choose, and
+commits the summary back to the repo.
 
 ## How it works
 
@@ -22,15 +22,20 @@ markdown back to the repo.
      `compute_type="float16"`). Set `FORCE_WHISPER=1` to always skip captions.
   3. Summarize the transcript with the Anthropic API (`claude-haiku-4-5`) into a
      one-line TL;DR, key-point bullets, and notable claims/takeaways.
-  4. Return markdown with the video title + URL as a header.
+  4. Return readable plain text in the selected Simple, Detailed, or Complex
+     format.
 
-Summaries are written to `summaries/<sanitized-title>.md`.
+Repository copies are written to
+`summaries/<sanitized-title>--<youtube-id>.txt`. The desktop app also writes
+them directly to the folder selected in its GUI, including Google Drive for
+desktop folders.
 
 ## Repo layout
 
 ```
-drain.py            # queue drainer (Task Scheduler entry point)
-pipeline.py         # URL -> captions/whisper -> Anthropic -> markdown
+desktop_gui.py      # Windows GUI + queue listener
+drain.py            # queue drainer
+pipeline.py         # URL -> captions/whisper -> model -> plain text
 requirements.txt
 .env.example
 .gitignore
@@ -76,8 +81,11 @@ summaries/          # generated summaries land here
 | ------------------- | -------- | ------------------------------------------------------------------ |
 | `GITHUB_TOKEN`      | yes      | Fine-grained PAT scoped to this repo (see scopes below).           |
 | `GITHUB_REPO`       | yes      | The repo the queue lives in, as `owner/repo`.                      |
-| `ANTHROPIC_API_KEY` | yes      | Anthropic API key from the console.                               |
+| `OPENAI_API_KEY`    | usually  | Required when `SUMMARY_PROVIDER=openai` (the default).             |
+| `ANTHROPIC_API_KEY` | alternate| Required only when `SUMMARY_PROVIDER=anthropic`.                   |
 | `FORCE_WHISPER`     | no       | Set to `1` to always transcribe with Whisper and skip captions.   |
+| `SUMMARY_DETAIL`    | no       | `simple`, `detailed`, or `complex` (GUI choice overrides this).   |
+| `SUMMARY_FOLDER`    | no       | Output folder for CLI/server runs; the GUI has a folder picker.   |
 
 `.env` is git-ignored (it's the first entry in `.gitignore`). **Only ever commit
 `.env.example` with empty placeholders — never real keys.**
@@ -153,20 +161,31 @@ Register-ScheduledTask -TaskName "ContentSummarizer" `
 There are several ways to drain the queue — pick one (don't run more than one,
 or they'll double-process):
 
-1. **Local server — `python serve.py`** — the recommended, self-contained
-   option. One command runs a worker that polls the queue and summarizes each
-   video (from your home IP, using the local GPU when available) **plus** a web
-   dashboard. Packages into a single `.exe` later. See below.
-2. **Self-hosted runner (event-driven, home IP)** — GitHub fires the workflow
+1. **Windows desktop app — `ContentSummarizer.exe`** — the recommended mini-PC
+   option. It listens to the queue, shows activity, lets you choose a
+   local/Google Drive folder, and offers three levels of detail. See
+   **[EXE_SETUP.md](EXE_SETUP.md)**.
+2. **Local server — `python serve.py`** — source-based worker plus LAN web
+   dashboard. See below.
+3. **Self-hosted runner (event-driven, home IP)** — GitHub fires the workflow
    on issue-open; the job runs on a runner on a home PC. Instant (~3 s) but not
    a standalone script. See **[SETUP_SELF_HOSTED.md](SETUP_SELF_HOSTED.md)**.
-3. **Cloud (event-driven, serverless)** — GitHub Actions on hosted runners;
+4. **Cloud (event-driven, serverless)** — GitHub Actions on hosted runners;
    nothing at home runs, but YouTube blocks GitHub's datacenter IPs for many
    videos (needs cookies). See **[SETUP_CLOUD.md](SETUP_CLOUD.md)**.
-4. **Always-on mini PC** / **Scheduled desktop task** — see the mini-PC guide
+5. **Always-on mini PC** / **Scheduled desktop task** — see the mini-PC guide
    and the Task Scheduler section.
 
-## Local server (`serve.py`) — recommended
+## Windows desktop app (`ContentSummarizer.exe`) — recommended for the mini PC
+
+Build it with `build_exe.ps1`, then copy the contents of `dist/` and your
+private `.env` to the mini PC. Full instructions: **[EXE_SETUP.md](EXE_SETUP.md)**.
+
+The executable deliberately does not embed `.env`, ffmpeg, or the local CUDA
+stack. It supports caption extraction plus the OpenAI/remote-GPU transcription
+backends used by the mini PC.
+
+## Local server (`serve.py`)
 
 ```powershell
 .venv\Scripts\python.exe serve.py
