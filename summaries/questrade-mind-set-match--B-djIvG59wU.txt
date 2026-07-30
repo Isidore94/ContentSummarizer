@@ -1,0 +1,38 @@
+Questrade: Mind. Set. Match.
+https://youtu.be/B-djIvG59wU
+
+CORE IDEA  
+Quest Trade aims to empower ambitious Canadians to take control of their financial futures by providing innovative trading tools and personalized services. This approach helps users capitalize on their investment opportunities and fosters a mindset that challenges traditional financial norms.
+
+ARGUMENTS & LESSONS  
+- Ambition is a crucial driver for success: The speaker emphasizes that ambition fuels extraordinary achievements, pushing individuals (like Quest Trade founders) to defy expectations that finance is inaccessible to everyday people.  
+- Custom indexing allows personalized portfolios: Quest Trade introduces custom indexing, enabling investors to create personalized portfolios rather than relying on generic ETFs, aligning investments with individual market perspectives.  
+- Keeping up with market movements is essential: The importance of remaining informed and acting quickly in volatile markets is emphasized; those who move swiftly gain better opportunities and mitigate potential losses.  
+- New app features enhance information accessibility: The redesigned Quest Trade app now includes a discover tab that curates news relevant to users' interests and portfolios, ensuring they receive timely updates.  
+- Distilled news gives actionable insights: The platform filters noise from news to provide meaningful analysis on how market events affect users' holdings, streamlining decision-making.  
+- Thematic connections enhance understanding: Users can explore overarching themes within market news, allowing them to recognize how various factors, like AI developments or geopolitical issues, affect multiple securities.  
+- Trading efficiency is key: Quest Trade Pro offers hot keys and buttons to streamline trading actions, reducing time between insight and execution, essential for capitalizing on market opportunities.  
+- AI integration improves trading decision-making: Quest Trade's model context protocol (MCP) allows users to connect their accounts with AI platforms, facilitating real-time research and trade management.  
+- Flows automate trading strategies: Users can create rules for automated trades based on market conditions, allowing them to capitalize on insights without continuously monitoring the market.  
+- Holistic financial overview is necessary: The new personal balance sheet feature provides users with an integrated view of their assets and liabilities, highlighting areas for potential optimization.  
+- The Smith Maneuver leverages home equity: This strategy allows homeowners to access their equity for investment, potentially allowing them to pay off their mortgage faster and build wealth tax-efficiently.  
+- Continuous optimization reveals hidden opportunities: Quest Trade’s balance sheet optimization tools continuously assess users' investments and expenses, identifying areas for financial improvement.  
+- Cash back on trading is innovative: Quest Trade introduces cash back on US equity options trading, incentivizing users to engage with the platform while maintaining financial returns.  
+- Expanded financial access through pre-IPO investments: Eligible users can invest in pre-IPO companies, acquiring shares before they go public and potentially reaping significant returns.  
+
+MENTAL MODELS & DEFINITIONS  
+- Custom Indexing: A personalized investment strategy allowing users to build their portfolios according to specific criteria and preferences.  
+- Model Context Protocol (MCP): A system that enables secure connection between users' trading accounts and AI platforms for personalized financial advice and trading execution.  
+- Flows: A feature that allows users to automate trades based on specific triggers, enhancing the ability to act on market insights without constant monitoring.  
+- Smith Maneuver: A financial strategy that enables homeowners to use home equity to invest in the market, making use of idle equity for wealth building.  
+
+EVIDENCE & NUMBERS  
+- Over 80% of active funds trail the S&P 500 over 15 years, underscoring the advantages of a more passive, indexed investment approach.  
+- Using the Smith Maneuver, a $1 million mortgage holder can potentially retire with $1.7 million more in their portfolio by investing the freed-up equity.  
+- Investing in pre-IPO companies prior to their public offerings has historically yielded 80% annualized returns compared to 35% for buying on the IPO day, and a decrease of 10% for post-IPO trading.  
+
+COUNTERPOINTS & LIMITS  
+- Assumes users will manage complexities associated with automated investing strategies effectively; potential for errors in automation remains a concern.
+- The effectiveness of strategies like the Smith Maneuver depends on market conditions, individual risk tolerance, and accuracy in accessing home equity.
+- User responses to new app features may vary based on their financial literacy and comfort with technology; there is no guarantee all users will fully utilize enhancements effectively.  
+- Some users may find the push for constant optimization to be burdensome rather than beneficial, especially if they lack time to engage with new tools consistently.
