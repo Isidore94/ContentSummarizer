@@ -145,52 +145,166 @@ app = FastAPI(lifespan=lifespan)
 
 
 _CSS = """
-:root { color-scheme: light dark; }
+/* One set of tokens, themed once. Every colour below is a variable so the dark
+   theme is a single block at the bottom rather than a second stylesheet. */
+:root {
+  color-scheme: light dark;
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --line: #e2e5ea;
+  --ink: #14171c;
+  --ink-soft: #565d6b;
+  --ink-faint: #858d9b;
+  --brand: #2f6fed;
+  --brand-ink: #ffffff;
+  --brand-soft: #e8f0fe;
+  --ok: #0f7a52;
+  --ok-soft: #e0f4ec;
+  --err: #c0362b;
+  --err-soft: #fceceb;
+  --radius: 14px;
+  --shadow: 0 1px 2px rgba(18, 22, 32, .04), 0 8px 24px rgba(18, 22, 32, .05);
+}
 * { box-sizing: border-box; }
-body { font: 15px/1.55 system-ui, "Segoe UI", sans-serif; max-width: 840px;
-       margin: 0 auto; padding: 24px 16px; background: #f7f7f8; color: #1a1a1a; }
-h1 { font-size: 22px; margin: 0 0 4px; }
+body {
+  /* Segoe UI Variable is Windows 11's text face and is noticeably better fitted
+     than plain Segoe UI at body sizes; -apple-system takes over on the phone. */
+  font-family: "Segoe UI Variable Text", -apple-system, BlinkMacSystemFont,
+               "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 36px 20px 72px;
+  background: var(--bg);
+  color: var(--ink);
+  overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+h1 { font-size: 27px; line-height: 1.25; letter-spacing: -.021em; font-weight: 640;
+     margin: 0 0 28px; }
 h1 a { color: inherit; text-decoration: none; }
-h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .04em;
-     color: #666; margin: 22px 0 8px; }
-.card { background: #fff; border: 1px solid #e3e3e6; border-radius: 10px;
-        padding: 14px 18px; margin: 10px 0; }
-.muted { color: #777; font-size: 13px; }
-input[type=text], textarea { width: 100%; max-width: 520px; padding: 8px 10px;
-        border: 1px solid #ccc; border-radius: 8px; background: inherit; color: inherit; }
-textarea { font: inherit; resize: vertical; min-height: 62px; margin-top: 8px; }
-.field-hint { margin: 6px 0 10px; }
-button { padding: 7px 14px; border: 0; border-radius: 8px; background: #2563eb;
-         color: #fff; cursor: pointer; font-size: 14px; }
-button:hover { background: #1d4ed8; }
-form.inline { display: inline; margin-left: 6px; }
-form.inline button { padding: 2px 10px; font-size: 12px; background: #64748b; }
-.badge { border-radius: 6px; padding: 1px 8px; font-size: 12px; margin-left: 6px; }
-.badge.fail { background: #dc2626; color: #fff; }
-.badge.on { background: #16a34a; color: #fff; }
-.badge.off { background: #6b7280; color: #fff; }
-.seg { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-.seg form { display: inline; }
-.seg button { background: #64748b; padding: 4px 12px; font-size: 13px; }
-.seg button.active { background: #2563eb; }
-.btn { background: #2563eb; color: #fff; padding: 4px 12px; border-radius: 8px;
-       font-size: 13px; text-decoration: none; display: inline-block; }
-.btn:hover { background: #1d4ed8; text-decoration: none; }
-ul { padding-left: 20px; margin: 6px 0; }
-li { margin: 7px 0; }
-a { color: #2563eb; text-decoration: none; }
+/* Section labels: small and quiet, but with room above so each block reads as
+   its own thing instead of running into the card before it. */
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .085em;
+     font-weight: 660; color: var(--ink-faint); margin: 36px 0 12px; }
+a { color: var(--brand); text-decoration: none; }
 a:hover { text-decoration: underline; }
-.prose { background: #fff; border: 1px solid #e3e3e6; border-radius: 10px;
-         padding: 20px 26px; }
-.prose h1 { font-size: 20px; }
-.status-line { display: flex; gap: 18px; flex-wrap: wrap; }
+.muted { color: var(--ink-faint); font-size: 13.5px; }
+
+.card { background: var(--surface); border: 1px solid var(--line);
+        border-radius: var(--radius); padding: 22px 24px; box-shadow: var(--shadow); }
+.card-divider { border: 0; border-top: 1px solid var(--line); margin: 20px -24px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+
+/* Status: a label above its value, in columns that wrap. The old single line ran
+   four labelled values together and read as one long sentence. */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+         gap: 18px 26px; }
+.stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+              font-weight: 660; color: var(--ink-faint); }
+.stat-value { font-size: 15px; line-height: 1.45; font-variant-numeric: tabular-nums;
+              overflow-wrap: anywhere; }
+
+button, .btn {
+  font: inherit; font-size: 14px; font-weight: 550; line-height: 1;
+  min-height: 40px; padding: 0 16px; border: 1px solid transparent; border-radius: 10px;
+  background: var(--brand); color: var(--brand-ink); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  text-decoration: none; transition: filter .15s ease, background .15s ease;
+}
+button:hover, .btn:hover { filter: brightness(1.07); text-decoration: none; }
+button:active, .btn:active { filter: brightness(.95); }
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.btn-quiet { background: var(--surface-2); color: var(--ink-soft); border-color: var(--line); }
+
+input[type=text], input[type=search], textarea {
+  width: 100%; font: inherit; font-size: 15px; padding: 11px 14px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface); color: var(--ink);
+}
+input[type=text]:focus, input[type=search]:focus, textarea:focus {
+  outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft);
+}
+::placeholder { color: var(--ink-faint); }
+textarea { resize: vertical; min-height: 84px; margin-top: 10px; line-height: 1.55; }
+.field-hint { margin: 10px 0 16px; }
+.searchbar { display: flex; gap: 10px; align-items: center; }
+.searchbar input { flex: 1; min-width: 0; }
+
+form.inline { display: inline-flex; margin: 0; }
+form.inline button, .btn-sm { min-height: 30px; padding: 0 11px; font-size: 12.5px;
+  background: var(--surface-2); color: var(--ink-soft); border-color: var(--line); }
+
+.badge { font-size: 11px; font-weight: 660; text-transform: uppercase;
+         letter-spacing: .04em; padding: 3px 9px; border-radius: 999px; line-height: 1.5; }
+.badge.fail { background: var(--err-soft); color: var(--err); }
+.badge.on { background: var(--ok-soft); color: var(--ok); }
+.badge.off { background: var(--surface-2); color: var(--ink-faint); }
+
+.seg { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.seg form { display: inline-flex; }
+.seg button { min-height: 34px; padding: 0 13px; font-size: 13px;
+              background: var(--surface-2); color: var(--ink-soft); border-color: var(--line); }
+.seg button.active { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
+.seg .btn { min-height: 34px; font-size: 13px; }
+
+/* Rows, not bullets: a title on the left and its date on the right, separated by
+   hairlines. Bulleted lines of "title date title date" were the worst of the clutter. */
+.list { list-style: none; padding: 0; margin: 0; }
+.list li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+           padding: 13px 0; border-top: 1px solid var(--line); margin: 0; }
+.list li:first-child { border-top: 0; padding-top: 2px; }
+.list li:last-child { padding-bottom: 2px; }
+/* Queue entries are raw YouTube URLs: one unbreakable token long enough to push the
+   whole page wider than a phone, which then clips every row on the right. min-width:0
+   lets the flex item shrink; anywhere lets the URL itself break. */
+.list a { font-weight: 550; min-width: 0; overflow-wrap: anywhere; }
+.list .when { margin-left: auto; font-size: 13px; color: var(--ink-faint);
+              font-variant-numeric: tabular-nums; white-space: nowrap; }
+.list .snippet { flex-basis: 100%; margin: 2px 0 0; font-size: 13.5px;
+                 color: var(--ink-faint); }
+.empty { color: var(--ink-faint); margin: 2px 0; }
+
+.prose { background: var(--surface); border: 1px solid var(--line);
+         border-radius: var(--radius); padding: 30px 34px; box-shadow: var(--shadow); }
+.prose h1 { font-size: 22px; margin-bottom: 18px; }
+/* A summary is prose, not code: reading it in the body face at a generous measure
+   beats the monospace block it used to be. */
+.prose pre { font: inherit; line-height: 1.72; white-space: pre-wrap;
+             overflow-wrap: anywhere; margin: 0; }
+.backlink { margin: 0 0 18px; font-size: 14px; }
+
+@media (max-width: 560px) {
+  body { padding: 22px 15px 56px; font-size: 15.5px; }
+  h1 { font-size: 23px; margin-bottom: 22px; }
+  h2 { margin-top: 28px; }
+  .card { padding: 17px 18px; border-radius: 12px; }
+  .card-divider { margin: 17px -18px; }
+  .prose { padding: 22px 20px; }
+}
+
 @media (prefers-color-scheme: dark) {
-  body { background: #121214; color: #e6e6e9; }
-  .card, .prose { background: #1c1c1f; border-color: #333338; }
-  h2 { color: #9a9aa3; }
-  .muted { color: #94949c; }
-  input[type=text], textarea { border-color: #44444a; }
-  a { color: #7aa2ff; }
+  :root {
+    --bg: #0e1014;
+    --surface: #171a20;
+    --surface-2: #232833;
+    --line: #2b313c;
+    --ink: #e7e9ee;
+    --ink-soft: #a7aebc;
+    --ink-faint: #7e8695;
+    --brand: #5b8cff;
+    --brand-ink: #0a0f1c;
+    --brand-soft: #1a2337;
+    --ok: #3fcb92;
+    --ok-soft: #12291f;
+    --err: #ff7a6d;
+    --err-soft: #2c1715;
+    --shadow: none;
+  }
 }
 """
 
@@ -266,8 +380,8 @@ def _refresh_controls(refresh):
         else ""
     )
     return (
-        '<div class="seg" style="margin-top:10px">'
-        '<a class="btn" href="/">↻ Refresh now</a>'
+        '<div class="seg" style="margin-top:12px">'
+        '<a class="btn btn-quiet" href="/">&#8635; Refresh now</a>'
         '<span class="muted">Auto-refresh:</span>'
         f'{"".join(seg)}{countdown}'
         "</div>"
@@ -291,6 +405,25 @@ def _summary_title(text):
         if line:
             return line[2:].strip() if line.startswith("# ") else line
     return None
+
+
+def _body_without_title(text, title):
+    """The summary minus its own first-line title, which the page shows as a heading.
+
+    Only strips a line that IS the title, so a summary that opens straight into prose
+    keeps every word.
+    """
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        if line.strip() == (title or "").strip():
+            rest = lines[index + 1 :]
+            while rest and not rest[0].strip():
+                rest.pop(0)
+            return "\n".join(rest)
+        break
+    return text
 
 
 def _summary_files():
@@ -326,16 +459,17 @@ def home(cs_refresh: str = Cookie(default="0")):
             else ""
         )
         rows.append(
-            f'<li>#{issue["number"]} '
+            f'<li><span class="muted">#{issue["number"]}</span> '
             f'<a href="{html.escape(issue["html_url"])}" target="_blank">'
-            f'{html.escape(issue["title"])}</a>{badge}{retry}</li>'
+            f'{html.escape(issue["title"])}</a>{badge}'
+            f'<span class="when">{retry}</span></li>'
         )
     if queue_err:
-        queue_html = f'<p class="muted">Could not reach GitHub: {html.escape(queue_err)}</p>'
+        queue_html = f'<p class="empty">Could not reach GitHub: {html.escape(queue_err)}</p>'
     elif rows:
-        queue_html = "<ul>" + "".join(rows) + "</ul>"
+        queue_html = '<ul class="list">' + "".join(rows) + "</ul>"
     else:
-        queue_html = '<p class="muted">Queue is empty.</p>'
+        queue_html = '<p class="empty">Queue is empty.</p>'
 
     items = []
     for path in _summary_files()[:20]:
@@ -346,13 +480,13 @@ def home(cs_refresh: str = Cookie(default="0")):
             title = stem
         date = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(path)))
         items.append(
-            f'<li><a href="/s/{stem}">{html.escape(title)}</a> '
-            f'<span class="muted">{date}</span></li>'
+            f'<li><a href="/s/{stem}">{html.escape(title)}</a>'
+            f'<span class="when">{date}</span></li>'
         )
     summaries_html = (
-        "<ul>" + "".join(items) + "</ul>"
+        '<ul class="list">' + "".join(items) + "</ul>"
         if items
-        else '<p class="muted">No summaries yet.</p>'
+        else '<p class="empty">No summaries yet.</p>'
     )
 
     provider = os.environ.get("SUMMARY_PROVIDER", "openai")
@@ -368,7 +502,10 @@ def home(cs_refresh: str = Cookie(default="0")):
             if online
             else '<span class="badge off">offline</span>'
         )
-        gpu_html = f"<span><b>GPU PC:</b> {gpu_badge}</span>"
+        gpu_html = (
+            '<div class="stat"><span class="stat-label">GPU PC</span>'
+            f'<span class="stat-value">{gpu_badge}</span></div>'
+        )
 
     if NO_WORKER:
         seg_html = ""
@@ -390,27 +527,43 @@ def home(cs_refresh: str = Cookie(default="0")):
             f'<div class="seg"><span class="muted">Transcription:</span>{"".join(seg)}'
             '<span class="muted">(resets to .env on restart)</span></div>'
         )
+        # Drain does real work, so it keeps the filled button; refreshing only
+        # re-reads a page and sits below it as a quiet one.
         controls_html = (
-            '<p style="margin-bottom:0"><form class="inline" method="post" '
-            'action="/drain" style="margin-left:0"><button>Drain now</button></form></p>'
+            '<div class="row"><form method="post" action="/drain">'
+            "<button>Drain now</button></form></div>"
         )
         meta_html = (
-            f'<p class="muted">summaries via {html.escape(provider)} · '
+            f'<p class="muted">Summaries via {html.escape(provider)} · '
             f"polling every {worker.poll_seconds}s</p>"
         )
     # Both modes get it: viewer mode is exactly when the page cannot know that the
     # external runner has finished something.
     controls_html += _refresh_controls(refresh)
 
+    stats = [
+        '<div class="stat"><span class="stat-label">State</span>'
+        f'<span class="stat-value">{html.escape(str(s["state"]))}</span></div>'
+    ]
+    if not NO_WORKER:
+        stats.append(
+            '<div class="stat"><span class="stat-label">Last poll</span>'
+            f'<span class="stat-value">{_ago(s["last_poll"])} '
+            f'<span class="muted">{html.escape(s["last_result"] or "—")}</span>'
+            "</span></div>"
+        )
+        stats.append(
+            '<div class="stat"><span class="stat-label">Lifetime</span>'
+            f'<span class="stat-value">{s["ok_total"]} ok · {s["failed_total"]} failed'
+            "</span></div>"
+        )
+    stats.append(gpu_html)
+
     body = f"""
 <div class="card">
-  <div class="status-line">
-    <span><b>State:</b> {html.escape(str(s["state"]))}</span>
-    {"" if NO_WORKER else f'<span><b>Last poll:</b> {_ago(s["last_poll"])} ({html.escape(s["last_result"] or "—")})</span>'}
-    {"" if NO_WORKER else f'<span><b>Lifetime:</b> {s["ok_total"]} ok / {s["failed_total"]} failed</span>'}
-    {gpu_html}
-  </div>
+  <div class="stats">{"".join(stats)}</div>
   {meta_html}
+  <hr class="card-divider">
   {seg_html}
   {controls_html}
 </div>
@@ -430,10 +583,11 @@ def home(cs_refresh: str = Cookie(default="0")):
 
 <h2>Summaries</h2>
 <div class="card">
-  <form method="get" action="/search">
-    <input type="text" name="q" placeholder="Search summaries...">
+  <form class="searchbar" method="get" action="/search">
+    <input type="search" name="q" placeholder="Search summaries&hellip;" aria-label="Search summaries">
     <button>Search</button>
   </form>
+  <hr class="card-divider">
   {summaries_html}
 </div>
 """
@@ -449,19 +603,31 @@ def summary_page(stem: str):
     path = txt_path if os.path.isfile(txt_path) else md_path
     if not os.path.isfile(path):
         return HTMLResponse(
-            _page("Not found", '<p>No such summary.</p><p><a href="/">← back</a></p>'),
+            _page(
+                "Not found",
+                '<div class="card"><p class="empty">No such summary.</p></div>'
+                '<p class="backlink" style="margin-top:18px">'
+                '<a href="/">&larr; Back</a></p>',
+            ),
             status_code=404,
         )
     text = open(path, encoding="utf-8").read()
+    title = _summary_title(text) or stem
     if path.endswith(".txt"):
-        body = f'<pre style="white-space:pre-wrap">{html.escape(text)}</pre>'
+        # The first line is the title; showing it as a heading rather than as the first
+        # line of body text is most of what makes this read like a document.
+        body = (
+            f"<h1>{html.escape(title)}</h1>"
+            f"<pre>{html.escape(_body_without_title(text, title))}</pre>"
+        )
     else:
         # Model output is untrusted; escaping first prevents raw-HTML/script
         # injection while retaining the useful Markdown structure.
         body = md.markdown(html.escape(text), extensions=["extra"])
     return _page(
-        _summary_title(text) or stem,
-        f'<p><a href="/">← back</a></p><article class="prose">{body}</article>',
+        title,
+        f'<p class="backlink"><a href="/">&larr; Back</a></p>'
+        f'<article class="prose">{body}</article>',
     )
 
 
@@ -485,19 +651,25 @@ def search(q: str = ""):
 
     items = "".join(
         f'<li><a href="/s/{stem}">{html.escape(title)}</a>'
-        f'<div class="muted">{html.escape(line[:180])}</div></li>'
+        f'<p class="snippet">{html.escape(line[:180])}</p></li>'
         for stem, title, line in results
     )
-    hits = (
-        f"<ul>{items}</ul>"
-        if items
-        else ('<p class="muted">No matches.</p>' if q else "")
-    )
+    if items:
+        count = len(results)
+        hits = (
+            f'<h2>{count} match{"" if count == 1 else "es"}</h2>'
+            f'<div class="card"><ul class="list">{items}</ul></div>'
+        )
+    elif q:
+        hits = '<div class="card"><p class="empty">No matches.</p></div>'
+    else:
+        hits = ""
     body = f"""
-<p><a href="/">← back</a></p>
+<p class="backlink"><a href="/">&larr; Back</a></p>
 <div class="card">
-  <form method="get" action="/search">
-    <input type="text" name="q" value="{html.escape(q, quote=True)}" placeholder="Search summaries...">
+  <form class="searchbar" method="get" action="/search">
+    <input type="search" name="q" value="{html.escape(q, quote=True)}"
+           placeholder="Search summaries&hellip;" aria-label="Search summaries">
     <button>Search</button>
   </form>
 </div>
@@ -513,8 +685,9 @@ def queue_video(url: str = Form(...), prompt: str = Form("")):
         return HTMLResponse(
             _page(
                 "Error",
-                "<p>That doesn't look like a URL.</p>"
-                '<p><a href="/">← back</a></p>',
+                '<div class="card"><p class="empty">That doesn&rsquo;t look like a URL.'
+                "</p></div>"
+                '<p class="backlink" style="margin-top:18px"><a href="/">&larr; Back</a></p>',
             ),
             status_code=400,
         )

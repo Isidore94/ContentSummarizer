@@ -362,6 +362,25 @@ class WebRefreshTests(unittest.TestCase):
         self.assertIn("activeElement", page)
         self.client.post("/settings/refresh", data={"seconds": "0"})
 
+    def test_a_summary_shows_its_title_as_a_heading_exactly_once(self):
+        d = self.dashboard
+        text = "The Big IQ Controversy\n\nCORE IDEA\nTests measure a narrow band.\n"
+        self.assertEqual(
+            d._body_without_title(text, "The Big IQ Controversy"),
+            "CORE IDEA\nTests measure a narrow band.",
+        )
+
+    def test_a_summary_that_opens_in_prose_keeps_every_word(self):
+        d = self.dashboard
+        text = "IQ tests measure a narrow band.\nAnd a second line.\n"
+        self.assertEqual(d._body_without_title(text, "Something else entirely"), text)
+        # The detected title IS the first line here, so stripping it is correct and
+        # must not also eat the line after it.
+        self.assertEqual(
+            d._body_without_title(text, "IQ tests measure a narrow band."),
+            "And a second line.",
+        )
+
     def test_the_gpu_badge_is_not_probed_on_every_reload(self):
         """A switched-off GPU PC costs a multi-second timeout. Paying it once per page
         load was tolerable; paying it every 15 seconds under auto-refresh is not."""
