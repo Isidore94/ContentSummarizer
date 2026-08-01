@@ -24,7 +24,7 @@ from logging.handlers import RotatingFileHandler
 
 import markdown as md
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form
+from fastapi import Cookie, FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 import drain
@@ -58,7 +58,40 @@ NO_WORKER = os.environ.get("DASHBOARD_NO_WORKER", "").strip().lower() in {
 # `git pull` brings them to disk. (No-op when there's nothing to fetch.)
 SUMMARY_PULL_SECONDS = int(os.environ.get("SUMMARY_PULL_SECONDS") or 60)
 
+# Auto-refresh: how often the home page may reload itself, in seconds (0 = never).
+# Per-device rather than a server setting, because the phone left open on the counter
+# and the PC someone is typing into want different answers.
+REFRESH_CHOICES = (0, 15, 30, 60)
+REFRESH_COOKIE = "cs_refresh"
+REFRESH_COOKIE_MAX_AGE = 400 * 24 * 3600  # remember the choice for well over a year
+
 worker: Worker | None = None
+
+
+# The GPU badge is decoration, but probing a switched-off GPU PC costs a real timeout
+# (~3s here, measured), and every home() render paid it. Auto-refresh would charge that
+# every few seconds, making the page feel broken. Cached for display only — the routing
+# decision in pipeline.transcribe() still probes live, because sending a job to a node
+# that died 20 seconds ago is a different kind of wrong.
+GPU_STATUS_TTL = 30
+_gpu_status = {"checked_at": 0.0, "online": False}
+
+
+def _gpu_online_cached():
+    now = time.time()
+    if now - _gpu_status["checked_at"] > GPU_STATUS_TTL:
+        _gpu_status["online"] = pipeline.gpu_node_online()
+        _gpu_status["checked_at"] = now
+    return _gpu_status["online"]
+
+
+def _refresh_seconds(raw):
+    """The refresh interval a request asked for, or 0 for off. Never trusts the value."""
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return 0
+    return value if value in REFRESH_CHOICES else 0
 
 
 def attach_worker(existing: Worker, summary_dir=None):
@@ -140,6 +173,9 @@ form.inline button { padding: 2px 10px; font-size: 12px; background: #64748b; }
 .seg form { display: inline; }
 .seg button { background: #64748b; padding: 4px 12px; font-size: 13px; }
 .seg button.active { background: #2563eb; }
+.btn { background: #2563eb; color: #fff; padding: 4px 12px; border-radius: 8px;
+       font-size: 13px; text-decoration: none; display: inline-block; }
+.btn:hover { background: #1d4ed8; text-decoration: none; }
 ul { padding-left: 20px; margin: 6px 0; }
 li { margin: 7px 0; }
 a { color: #2563eb; text-decoration: none; }
@@ -159,17 +195,82 @@ a:hover { text-decoration: underline; }
 """
 
 
-def _page(title, body):
+# Reloading the page under someone mid-sentence would throw away a half-typed URL or
+# prompt, so the timer holds while a field is focused or has anything in it, and says so.
+# The countdown is not decoration: without it a page that reloads itself looks like a bug.
+_REFRESH_JS = """
+(function () {
+  var every = %d, left = every;
+  var out = document.getElementById("refresh-countdown");
+  function busy() {
+    var el = document.activeElement;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) return true;
+    var fields = document.querySelectorAll("input[type=text], textarea");
+    for (var i = 0; i < fields.length; i++) {
+      if (fields[i].value.trim()) return true;
+    }
+    return false;
+  }
+  setInterval(function () {
+    if (busy()) {
+      left = every;
+      if (out) out.textContent = "paused while you type";
+      return;
+    }
+    left -= 1;
+    if (left <= 0) { location.reload(); return; }
+    if (out) out.textContent = "refreshing in " + left + "s";
+  }, 1000);
+})();
+"""
+
+
+def _page(title, body, refresh=0):
+    # <noscript> carries the plain-HTML fallback: a browser without JS still keeps up,
+    # it just cannot pause for typing the way the script does.
+    head_extra = (
+        f'<noscript><meta http-equiv="refresh" content="{int(refresh)}"></noscript>'
+        if refresh
+        else ""
+    )
+    script = f"<script>{_REFRESH_JS % int(refresh)}</script>" if refresh else ""
     return (
         "<!doctype html><html><head>"
         '<meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{html.escape(title)}</title>"
+        f"{head_extra}"
         f"<style>{_CSS}</style>"
         "</head><body>"
         '<h1><a href="/">📼 ContentSummarizer</a></h1>'
         f"{body}"
+        f"{script}"
         "</body></html>"
+    )
+
+
+def _refresh_controls(refresh):
+    """The Refresh-now button and the auto-refresh segmented control."""
+    seg = []
+    for value in REFRESH_CHOICES:
+        label = "Off" if value == 0 else f"{value}s"
+        active = " active" if value == refresh else ""
+        seg.append(
+            '<form method="post" action="/settings/refresh">'
+            f'<input type="hidden" name="seconds" value="{value}">'
+            f'<button class="{active.strip()}">{label}</button></form>'
+        )
+    countdown = (
+        f' <span class="muted" id="refresh-countdown">refreshing in {refresh}s</span>'
+        if refresh
+        else ""
+    )
+    return (
+        '<div class="seg" style="margin-top:10px">'
+        '<a class="btn" href="/">↻ Refresh now</a>'
+        '<span class="muted">Auto-refresh:</span>'
+        f'{"".join(seg)}{countdown}'
+        "</div>"
     )
 
 
@@ -203,7 +304,8 @@ def _summary_files():
 
 
 @app.get("/", response_class=HTMLResponse)
-def home():
+def home(cs_refresh: str = Cookie(default="0")):
+    refresh = _refresh_seconds(cs_refresh)
     s = worker.snapshot()
 
     queue_err = None
@@ -260,7 +362,7 @@ def home():
 
     gpu_html = ""
     if pipeline._gpu_node_url():
-        online = pipeline.gpu_node_online()
+        online = _gpu_online_cached()
         gpu_badge = (
             '<span class="badge on">online</span>'
             if online
@@ -296,6 +398,9 @@ def home():
             f'<p class="muted">summaries via {html.escape(provider)} · '
             f"polling every {worker.poll_seconds}s</p>"
         )
+    # Both modes get it: viewer mode is exactly when the page cannot know that the
+    # external runner has finished something.
+    controls_html += _refresh_controls(refresh)
 
     body = f"""
 <div class="card">
@@ -332,7 +437,7 @@ def home():
   {summaries_html}
 </div>
 """
-    return _page("ContentSummarizer", body)
+    return _page("ContentSummarizer", body, refresh=refresh)
 
 
 @app.get("/s/{stem}", response_class=HTMLResponse)
@@ -435,6 +540,22 @@ def set_transcribe_mode(mode: str = Form(...)):
         os.environ["TRANSCRIBE_BACKEND"] = mode
         log.info("transcription mode set to %s", mode)
     return RedirectResponse("/", status_code=303)
+
+
+@app.post("/settings/refresh")
+def set_refresh(seconds: str = Form("0")):
+    """Remember this browser's auto-refresh choice. Per-device, so the phone on the
+    kitchen counter and the PC someone is typing at can differ."""
+    value = _refresh_seconds(seconds)
+    response = RedirectResponse("/", status_code=303)
+    response.set_cookie(
+        REFRESH_COOKIE,
+        str(value),
+        max_age=REFRESH_COOKIE_MAX_AGE,
+        samesite="lax",
+        httponly=False,
+    )
+    return response
 
 
 @app.post("/retry/{number}")

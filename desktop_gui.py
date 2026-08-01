@@ -1129,6 +1129,8 @@ def _smoke_test_lan_server():
             time.sleep(0.25)
     if 'name="prompt"' not in body:
         raise RuntimeError("the web page is missing the AI prompt box")
+    if "Auto-refresh:" not in body:
+        raise RuntimeError("the web page is missing the auto-refresh control")
 
 
 def main():

@@ -221,6 +221,11 @@ One process does everything:
 - **Dashboard** at `http://<this-pc>:8787` — queue view, paste-a-URL box,
   *Drain now*, per-video *Retry*, and a searchable summary reader that
   auto-syncs from the repo.
+- **Keeping the page current**: *Refresh now*, plus an **Auto-refresh** choice
+  of Off / 15s / 30s / 60s. The choice is remembered per browser (a cookie), so
+  the phone propped up in the kitchen can refresh itself while the PC you type
+  on stays still. The countdown pauses whenever a field is focused or has
+  anything in it, so a reload never eats a half-typed URL or prompt.
 - Startup prints the local + LAN URLs. Stop with Ctrl+C.
 - Later, bundle it: `pyinstaller --onefile serve.py` → `dist\serve.exe`.
 
@@ -245,7 +250,8 @@ any always-on box (e.g. a mini PC) — no GPU needed:
 - **Worker**: polls the queue every `POLL_INTERVAL_SECONDS` (default 120) and
   summarizes videos as they arrive.
 - **Dashboard**: a LAN web UI on port 8787 — queue view, paste-a-URL box,
-  *Drain now*, per-video *Retry*, and browsable/searchable summaries.
+  *Drain now*, per-video *Retry*, browsable/searchable summaries, and a
+  per-browser auto-refresh (Off / 15s / 30s / 60s) so a page left open keeps up.
 - **Transcription without a GPU**: with `TRANSCRIBE_BACKEND=auto` (the
   default), caption-less videos use the desktop's GPU node (`gpu_node.py`,
   below) whenever that PC is on, else the OpenAI audio API. `openai`, `local`

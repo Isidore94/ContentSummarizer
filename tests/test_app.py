@@ -286,5 +286,101 @@ class SafetyTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "2026.test")
 
 
+class WebRefreshTests(unittest.TestCase):
+    """The LAN page can keep itself up to date, per browser.
+
+    Everything the worker does happens elsewhere, so the page a phone is left open on
+    goes stale silently: the summary lands, the queue empties, and the screen still
+    shows the state from whenever it was loaded.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import dashboard
+        from fastapi.testclient import TestClient
+
+        class _StubWorker:
+            poll_seconds = 120
+            gh = None
+
+            def snapshot(self):
+                return {
+                    "state": "idle",
+                    "last_poll": None,
+                    "last_result": "",
+                    "ok_total": 0,
+                    "failed_total": 0,
+                }
+
+        cls.dashboard = dashboard
+        dashboard.attach_worker(_StubWorker(), summary_dir=tempfile.mkdtemp())
+        # The stub has no GitHub client; home() already renders the queue error path.
+        cls.client = TestClient(dashboard.app)
+
+    def test_refresh_choice_is_only_ever_one_of_the_offered_intervals(self):
+        for good in self.dashboard.REFRESH_CHOICES:
+            self.assertEqual(self.dashboard._refresh_seconds(str(good)), good)
+        for bad in ("", "  ", "7", "-30", "abc", None, "99999999", "30; drop table"):
+            self.assertEqual(self.dashboard._refresh_seconds(bad), 0)
+
+    def test_page_is_static_until_auto_refresh_is_turned_on(self):
+        page = self.client.get("/").text
+        self.assertIn("Refresh now", page)  # the manual option is always there
+        self.assertIn("Auto-refresh:", page)
+        self.assertNotIn("location.reload", page)
+        self.assertNotIn("http-equiv", page)
+
+    def test_choosing_an_interval_makes_the_page_reload_itself(self):
+        self.client.post("/settings/refresh", data={"seconds": "30"})
+        page = self.client.get("/").text
+        self.assertIn("location.reload", page)
+        self.assertIn("refreshing in 30s", page)
+        # A browser without JS still keeps up, via plain HTML.
+        self.assertIn('<meta http-equiv="refresh" content="30">', page)
+
+    def test_the_choice_survives_a_reload_and_can_be_turned_back_off(self):
+        self.client.post("/settings/refresh", data={"seconds": "60"})
+        self.assertEqual(self.client.cookies.get(self.dashboard.REFRESH_COOKIE), "60")
+        self.assertIn("refreshing in 60s", self.client.get("/").text)
+
+        self.client.post("/settings/refresh", data={"seconds": "0"})
+        page = self.client.get("/").text
+        self.assertNotIn("location.reload", page)
+        self.assertNotIn("http-equiv", page)
+
+    def test_a_tampered_cookie_cannot_turn_into_a_reload_loop(self):
+        self.client.cookies.set(self.dashboard.REFRESH_COOKIE, "1")
+        page = self.client.get("/").text
+        self.assertNotIn("location.reload", page)
+        self.client.cookies.delete(self.dashboard.REFRESH_COOKIE)
+
+    def test_reloading_holds_while_someone_is_typing(self):
+        """A page that reloaded under a half-typed URL would throw the URL away."""
+        self.client.post("/settings/refresh", data={"seconds": "15"})
+        page = self.client.get("/").text
+        self.assertIn("paused while you type", page)
+        self.assertIn("activeElement", page)
+        self.client.post("/settings/refresh", data={"seconds": "0"})
+
+    def test_the_gpu_badge_is_not_probed_on_every_reload(self):
+        """A switched-off GPU PC costs a multi-second timeout. Paying it once per page
+        load was tolerable; paying it every 15 seconds under auto-refresh is not."""
+        self.dashboard._gpu_status["checked_at"] = 0.0
+        with mock.patch(
+            "dashboard.pipeline.gpu_node_online", return_value=True
+        ) as probe:
+            for _ in range(5):
+                self.dashboard._gpu_online_cached()
+        self.assertEqual(probe.call_count, 1)
+
+    def test_other_pages_do_not_reload_themselves(self):
+        """Auto-refresh belongs to the dashboard; a summary being read must sit still."""
+        self.client.post("/settings/refresh", data={"seconds": "30"})
+        for path in ("/search?q=test", "/s/nope"):
+            page = self.client.get(path).text
+            self.assertNotIn("location.reload", page, path)
+        self.client.post("/settings/refresh", data={"seconds": "0"})
+
+
 if __name__ == "__main__":
     unittest.main()
