@@ -1,0 +1,39 @@
+The Deadliest Infectious Disease of All Time | Crash Course Lecture
+https://www.youtube.com/watch?v=7D-gxaie6UI
+
+CORE IDEA
+Tuberculosis (TB), despite being curable, continues to claim more lives annually than any other infectious disease. The problem is complex, intertwining historical perceptions, societal inequities, and modern systemic failures in healthcare access. TB serves as a mirror reflecting the structural issues and moral choices societies make about healthcare priorities.
+
+ARGUMENTS & LESSONS
+- Tuberculosis is an old disease affecting humanity for 3 million years, noted in ancient texts and visible in Egyptian mummies, showing its pervasive historical impact.
+- Modern medical advances provide the means to tackle TB, yet socio-economic barriers prevent equitable healthcare access, leading to persistent high mortality, especially in impoverished regions.
+- Historically, TB's interpretations ranged from genetic and contagious to being caused by foul air or fluid disharmony. The misconceptions underscore the human need for understanding and rationalizing suffering.
+- The bacterium Mycobacterium tuberculosis's unique fatty cell wall complicates immune response and treatment, as it facilitates slow bacterial growth, evasion from killing mechanisms, and complications in combating the disease.
+- TB infections are dormant or latent in about a quarter of the global population, with only 5-10% progressing to active disease, influenced by factors like malnutrition, HIV, and poor living conditions.
+- Stigma around TB, influenced by inaccurate beliefs about infection and moral judgments, deters public health efforts and compounds the burden on sufferers, who face both physical and social alienation.
+- During the 19th century, consumption was romanticized, perceived as a disease of refinement and beauty, particularly in literary and artistic circles, which obscured the true, harsh nature of the illness.
+- Unsustainable racialized medicine ideas historically posited TB as a white-exclusive disease, which ignored the reality of extensive TB impact and death in non-white communities, showing colonial biases.
+- Industrialization was a prime driver of TB spread due to overcrowded living conditions and poor nutrition, contrasting with earlier beliefs of romantic or racial exclusivity.
+- Advances in TB treatment, especially combination drug therapies developed mid-20th century, failed to reach the poorest parts of the world due to an economic profit-driven pharmaceutical industry.
+- Modern efforts by activists, like Phumeza Tisile, have pushed for equitable access to life-saving drugs, highlighting systemic inequalities and the non-compliance issues related to enforced treatment protocols.
+- Current protocols like Directly Observed Therapy (DOTs) emphasize treatment adherence due to mistrust in patient compliance, often ignoring structural barriers that prevent consistent treatment access.
+- Effective TB treatment corresponds directly with healthcare quality and availability; if universal access similar to that in high-income countries were available, TB mortality could potentially be eliminated.
+
+MENTAL MODELS & DEFINITIONS
+- **Active Disease**: The condition where TB bacteria actively multiply and cause symptoms, as opposed to latent infection where the bacteria remain dormant.
+- **Romanticization**: The act of idealizing a disease, which can obscure the real suffering of those affected, as seen with TB's historical depiction.
+- **Directly Observed Therapy (DOTs)**: A TB treatment protocol requiring patients to be observed taking their medication, rooted in the mistrust of patient compliance.
+
+EVIDENCE & NUMBERS
+- In 2022, TB killed more people than malaria, typhoid, cholera, homicide, and war combined, underlining its status as a leading infectious killer.
+- Around a quarter of humans are latently infected with TB, but only 5-10% will develop active disease, highlighting the bacterium's unusual behavior.
+- Between 1882 and 1930, TB mortality in the U.S. fell by approximately 80%, largely due to public health improvements unrelated to medical treatment.
+- The combination drug therapy for TB established in the mid-20th century became a curative measure, although inequitable access maintained high TB deaths in poorer regions.
+- In the early 1980s to 2005, the intertwining pandemics of HIV and TB caused millions of deaths, comparable in scale to both World Wars combined.
+- Despite being accessible in wealthier countries, until 2012-2013, no new TB drugs were developed, illustrating the profit-driven neglect by the pharmaceutical industry.
+
+COUNTERPOINTS & LIMITS
+- TB's romanticization and stigmatization historically impacted how society perceived victims, often blaming them for their illness, which misconstrues the randomness and social determinants of disease.
+- Assumes: modern TB deaths are avoidable within existing healthcare capabilities; hence, current mortality rates reflect strategic choices about healthcare distribution and priorities.
+- The profit-driven model of drug development fails to align with public health needs, as seen with the prolonged neglect of TB treatment developments post-1965.
+- Missed TB diagnoses due to reliance on flawed microscopy leads to critical delays in appropriate care, as consistency in diagnostic advancement and distribution remains a pressing issue.

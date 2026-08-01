@@ -1,0 +1,28 @@
+Why people mistake feelings for moral insight | Alex O'Connor
+https://youtube.com/watch?v=0tRxtfHpVk4&si=1ey056Bp7iHoh4Go
+
+CORE IDEA
+Emotivism, as explained by Alex O'Connor, is an ethical theory asserting that moral statements do not convey facts that can be true or false but are merely expressions of emotional reactions. This matter challenges the conventional understanding of moral discourse and shifts ethical debates to discussions over expressive attitudes rather than factual disagreements.
+
+ARGUMENTS & LESSONS
+- Emotivism posits that saying "murder is wrong" is akin to expressing a dislike for murder, like an emotional reaction such as "Boo murder," rather than stating an empirical fact.
+- Ethical statements, according to emotivism, lack truth value because they are expressions of attitudes, not factual claims that can be verified as true or false.
+- Emotivism is categorized under non-cognitivism, the belief that moral statements do not have truth value, as opposed to cognitivism, which attributes truth value to moral statements.
+- A.J. Ayer, a key figure in emotivism, argues that substantive ethical debates often revolve around factual differences rather than genuine moral disagreements, suggesting most disagreements resolve once factual matters are settled.
+- The incest taboo highlights the emotionally driven nature of moral judgments; despite rationalizations, disgust often underlies the perception of incest as wrong.
+- Disagreement on moral issues could result from deep-seated, possibly evolutionary, emotional predispositions, suggesting that fundamental ethics may be more consistent across humanity than apparent disagreements suggest.
+- Emotions might not be entirely distinct from attitudes; both terms could be interchangeable when discussing ethical reactions, though Simon Blackburn's quasi-realism proposes differentiation between them.
+
+MENTAL MODELS & DEFINITIONS
+- EMOTIVISM: An ethical theory and theory of language seeing moral statements as expressions of emotion rather than factual claims with truth value.
+- NON-COGNITIVISM: The belief that ethical statements do not have truth value and are not subject to truth or falsehood evaluations.
+- TRUTH VALUE: The quality of a statement being either true or false. Ethical statements, per emotivism, lack this.
+- FREGE-GEACH PROBLEM: A challenge for non-cognitivist theories like emotivism, focusing on the difficulty of maintaining meaning in embedded contexts without attributing truth value.
+
+EVIDENCE & NUMBERS
+- A.J. Ayer's "Language, Truth, and Logic" discusses how most moral arguments are about empirical facts rather than ethics itself. For example, in debates such as the impact of gun laws, emotivism suggests that moral conclusions often rest on descriptive, verifiable claims about outcomes (e.g., gun-related deaths).
+
+COUNTERPOINTS & LIMITS
+- A critical problem for emotivism, highlighted by the Frege-Geach problem, is its difficulty in accounting for logical consistency in complex moral arguments when ethical statements are embedded into larger sentences as it seemingly necessitates attributing truth value to moral claims.
+- Emotivists do not claim that ethical badness directly maps onto existing emotions like disgust or anger but suggest moral wrongness is a unique emotional state that parallels, but does not replicate, other emotions.
+- Addressing emotivism's notion of universal agreement on fundamental moral emotions, it is noted that a universally agreed emotional response (e.g., against innocent people dying) is unlikely given the variability of human emotional responses.
