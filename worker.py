@@ -60,7 +60,7 @@ class Worker:
         self._lock = threading.Lock()
         self._label_ready = False
         self.summary_detail = normalize_detail(
-            summary_detail or os.environ.get("SUMMARY_DETAIL", "simple")
+            summary_detail or os.environ.get("SUMMARY_DETAIL", "detailed")
         )
         self.output_dir = output_dir or os.environ.get("SUMMARY_FOLDER")
         self.status = {

@@ -20,10 +20,13 @@ commits the summary back to the repo.
   2. **Fallback:** if there are no captions, download `bestaudio` with `yt-dlp`
      and transcribe locally with `faster-whisper` (`large-v3`, `device="cuda"`,
      `compute_type="float16"`). Set `FORCE_WHISPER=1` to always skip captions.
-  3. Summarize the transcript with the Anthropic API (`claude-haiku-4-5`) into a
-     one-line TL;DR, key-point bullets, and notable claims/takeaways.
+  3. Summarize the transcript with the configured provider (`claude-sonnet-5`
+     via Anthropic, or `gpt-4o` via OpenAI — overridable with
+     `ANTHROPIC_SUMMARY_MODEL` / `OPENAI_SUMMARY_MODEL`) into dense study
+     notes: the core idea, every substantive argument or lesson with its
+     mechanism, and exact figures/citations as given in the video.
   4. Return readable plain text in the selected Simple, Detailed, or Complex
-     format.
+     format (Detailed is the default).
 
 Repository copies are written to
 `summaries/<sanitized-title>--<youtube-id>.txt`. The desktop app also writes
@@ -84,8 +87,10 @@ summaries/          # generated summaries land here
 | `OPENAI_API_KEY`    | usually  | Required when `SUMMARY_PROVIDER=openai` (the default).             |
 | `ANTHROPIC_API_KEY` | alternate| Required only when `SUMMARY_PROVIDER=anthropic`.                   |
 | `FORCE_WHISPER`     | no       | Set to `1` to always transcribe with Whisper and skip captions.   |
-| `SUMMARY_DETAIL`    | no       | `simple`, `detailed`, or `complex` (GUI choice overrides this).   |
+| `SUMMARY_DETAIL`    | no       | `simple`, `detailed` (default), or `complex` (GUI choice overrides this). |
 | `SUMMARY_FOLDER`    | no       | Output folder for CLI/server runs; the GUI has a folder picker.   |
+| `ANTHROPIC_SUMMARY_MODEL` | no | Override the Anthropic summary model (default `claude-sonnet-5`). |
+| `OPENAI_SUMMARY_MODEL` | no    | Override the OpenAI summary model (default `gpt-4o`).             |
 
 `.env` is git-ignored (it's the first entry in `.gitignore`). **Only ever commit
 `.env.example` with empty placeholders — never real keys.**

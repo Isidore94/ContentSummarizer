@@ -311,7 +311,7 @@ def process_issue(gh, issue, force_whisper, *, detail=None, output_dir=None):
         "issue #%s: %s%s", number, url, " (custom prompt)" if custom_prompt else ""
     )
 
-    detail = normalize_detail(detail or os.environ.get("SUMMARY_DETAIL", "simple"))
+    detail = normalize_detail(detail or os.environ.get("SUMMARY_DETAIL", "detailed"))
     result = pipeline.summarize_video(
         url,
         force_whisper=force_whisper,

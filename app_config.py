@@ -56,14 +56,14 @@ def load_runtime_env() -> Path | None:
 
 
 def normalize_detail(value: str | None) -> str:
-    detail = (value or "simple").strip().lower()
-    return detail if detail in DETAIL_LEVELS else "simple"
+    detail = (value or "detailed").strip().lower()
+    return detail if detail in DETAIL_LEVELS else "detailed"
 
 
 def load_settings() -> dict[str, object]:
     defaults: dict[str, object] = {
         "summary_folder": str(default_summary_dir()),
-        "summary_detail": "simple",
+        "summary_detail": "detailed",
         "auto_start": True,
     }
     path = settings_path()
