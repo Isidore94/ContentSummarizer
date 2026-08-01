@@ -65,6 +65,7 @@ def load_settings() -> dict[str, object]:
         "summary_folder": str(default_summary_dir()),
         "summary_detail": "detailed",
         "auto_start": True,
+        "notify_sound": True,
     }
     path = settings_path()
     try:
@@ -81,6 +82,7 @@ def load_settings() -> dict[str, object]:
         str(defaults["summary_detail"])
     )
     defaults["auto_start"] = bool(defaults["auto_start"])
+    defaults["notify_sound"] = bool(defaults["notify_sound"])
     return defaults
 
 
@@ -90,6 +92,7 @@ def save_settings(settings: dict[str, object]) -> Path:
         "summary_folder": str(Path(str(settings["summary_folder"])).expanduser()),
         "summary_detail": normalize_detail(str(settings["summary_detail"])),
         "auto_start": bool(settings.get("auto_start", True)),
+        "notify_sound": bool(settings.get("notify_sound", True)),
     }
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(clean, indent=2) + "\n", encoding="utf-8")

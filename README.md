@@ -190,6 +190,22 @@ The executable deliberately does not embed `.env`, ffmpeg, or the local CUDA
 stack. It supports caption extraction plus the OpenAI/remote-GPU transcription
 backends used by the mini PC.
 
+In the window:
+
+- The **summary list refreshes itself** every few seconds. When the worker
+  finishes a video, the new file is announced in the status strip, chimes
+  (toggle: *Chime on new summary*), and opens in the **Preview** pane — no
+  clicking around to find out whether it worked.
+- **Preview** reads the summary in-app; *Open in editor*, *Copy text*, and
+  *Show newest* sit under it. Double-click a row to open the `.txt`.
+- **Find** filters the saved summaries by any words in the title.
+- The header shows a coloured listening dot, done/failed counts, and a
+  progress bar while a video is actually being processed.
+- **Queue** and **Activity** share a tabbed pane. Failed queue rows are red.
+- **Paste** pulls a YouTube link off the clipboard; a link copied while the URL
+  box is empty is offered automatically. `F5` refreshes, `Ctrl+L` jumps to the
+  URL box, `Ctrl+Enter` queues from the prompt box.
+
 ## Local server (`serve.py`)
 
 ```powershell
