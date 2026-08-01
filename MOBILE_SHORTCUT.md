@@ -35,6 +35,23 @@ JSON body:
 `title` is the only required field — set it to the shared URL. GitHub responds
 `201 Created` with the new issue object on success.
 
+### Optional: a custom AI prompt
+
+Add a `body` field to tailor that one summary — the drainer treats an issue body
+as the AI instruction:
+
+```json
+{
+  "title": "https://www.youtube.com/watch?v=VIDEO_ID",
+  "body": "Focus on the investing advice and list every ticker mentioned."
+}
+```
+
+To be asked each time, insert an **Ask for Input** (Text, e.g. *"Prompt? (leave
+blank for normal)"*) action before **Get Contents of URL** and use its result as
+`body`. A blank answer gives the normal summary. The same box exists in the
+desktop window and the web GUI.
+
 > **Token:** use the same fine-grained PAT as the drainer (scoped to this repo,
 > **Issues: Read and write**). Creating issues only needs the Issues write
 > permission. Keep the token in the Shortcut only — don't share the Shortcut

@@ -16,7 +16,9 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+import dashboard
 import drain
+import pipeline
 from app_config import (
     DETAIL_LEVELS,
     data_dir,
@@ -31,6 +33,12 @@ from worker import Worker
 
 log = logging.getLogger("desktop_gui")
 _mutex_handle = None
+
+
+def _one_line(text, limit=160):
+    """Flatten text for a single-line label; a stray blob must not resize the UI."""
+    flat = " ".join(str(text).split())
+    return flat[: limit - 1] + "…" if len(flat) > limit else flat
 
 
 class GuiLogHandler(logging.Handler):
@@ -91,12 +99,16 @@ class ContentSummarizerApp:
         self.closing = False
         self.queue_links: dict[str, str] = {}
         self.summary_paths: list[Path] = []
+        self.lan_url = ""
+        self.lan_started = False
 
         self.folder_var = tk.StringVar(value=str(self.settings["summary_folder"]))
         self.detail_var = tk.StringVar(value=str(self.settings["summary_detail"]))
         self.auto_start_var = tk.BooleanVar(value=bool(self.settings["auto_start"]))
         self.status_var = tk.StringVar(value="Stopped")
         self.last_poll_var = tk.StringVar(value="Not polled yet")
+        self.lan_var = tk.StringVar(value="Web GUI: starts with the listener")
+        self.url_var = tk.StringVar()
 
         root.title("ContentSummarizer")
         root.geometry("920x720")
@@ -117,7 +129,7 @@ class ContentSummarizerApp:
         outer = ttk.Frame(self.root, padding=16)
         outer.pack(fill="both", expand=True)
         outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(3, weight=1)
+        outer.rowconfigure(4, weight=1)
 
         header = ttk.Frame(outer)
         header.grid(row=0, column=0, sticky="ew", pady=(0, 12))
@@ -133,6 +145,18 @@ class ContentSummarizerApp:
         ttk.Label(header, textvariable=self.last_poll_var).grid(
             row=1, column=0, columnspan=3, sticky="w", pady=(3, 0)
         )
+        lan_row = ttk.Frame(header)
+        lan_row.grid(row=2, column=0, columnspan=3, sticky="w", pady=(3, 0))
+        ttk.Label(lan_row, textvariable=self.lan_var).pack(side="left")
+        self.lan_open_button = ttk.Button(
+            lan_row, text="Open", width=6, command=self.open_lan_url, state="disabled"
+        )
+        self.lan_open_button.pack(side="left", padx=(8, 0))
+        self.lan_copy_button = ttk.Button(
+            lan_row, text="Copy link", width=10, command=self.copy_lan_url,
+            state="disabled",
+        )
+        self.lan_copy_button.pack(side="left", padx=(4, 0))
 
         settings_box = ttk.LabelFrame(outer, text="Summary settings", padding=12)
         settings_box.grid(row=1, column=0, sticky="ew", pady=(0, 12))
@@ -170,8 +194,36 @@ class ContentSummarizerApp:
                 command=self.change_detail,
             ).pack(side="left", padx=(0, 16))
 
+        add_box = ttk.LabelFrame(outer, text="Add a video", padding=12)
+        add_box.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+        add_box.columnconfigure(1, weight=1)
+
+        ttk.Label(add_box, text="Video URL").grid(row=0, column=0, sticky="w", padx=(0, 10))
+        url_entry = ttk.Entry(add_box, textvariable=self.url_var)
+        url_entry.grid(row=0, column=1, sticky="ew")
+        url_entry.bind("<Return>", lambda _e: self.queue_video())
+        ttk.Button(add_box, text="Queue it", command=self.queue_video).grid(
+            row=0, column=2, padx=(8, 0)
+        )
+
+        ttk.Label(add_box, text="AI prompt").grid(
+            row=1, column=0, sticky="nw", padx=(0, 10), pady=(8, 0)
+        )
+        self.prompt_text = tk.Text(add_box, height=3, wrap="word", font=("Segoe UI", 9))
+        self.prompt_text.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(8, 0))
+        ttk.Label(
+            add_box,
+            text=(
+                "Optional — tailor this one summary, e.g. \"focus on the investing "
+                "advice and list every ticker mentioned\". Leave empty for the "
+                "normal summary."
+            ),
+            wraplength=620,
+            justify="left",
+        ).grid(row=2, column=1, columnspan=2, sticky="w", pady=(4, 0))
+
         controls = ttk.Frame(outer)
-        controls.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+        controls.grid(row=3, column=0, sticky="ew", pady=(0, 12))
         self.listen_button = ttk.Button(
             controls, text="Start listening", command=self.toggle_listener
         )
@@ -190,7 +242,7 @@ class ContentSummarizerApp:
         ).pack(side="right")
 
         panes = ttk.Panedwindow(outer, orient="horizontal")
-        panes.grid(row=3, column=0, sticky="nsew")
+        panes.grid(row=4, column=0, sticky="nsew")
 
         queue_box = ttk.LabelFrame(panes, text="GitHub queue", padding=8)
         summary_box = ttk.LabelFrame(panes, text="Saved summaries", padding=8)
@@ -236,7 +288,7 @@ class ContentSummarizerApp:
         self.summary_list.bind("<Double-1>", self.open_selected_summary)
 
         log_box = ttk.LabelFrame(outer, text="Activity", padding=8)
-        log_box.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+        log_box.grid(row=5, column=0, sticky="ew", pady=(12, 0))
         log_box.columnconfigure(0, weight=1)
         self.log_text = tk.Text(
             log_box,
@@ -307,6 +359,7 @@ class ContentSummarizerApp:
         )
         self.worker_thread.start()
         self._sync_repository_summaries(folder)
+        self._start_lan_server()
         return True
 
     def start_listener(self):
@@ -337,6 +390,84 @@ class ContentSummarizerApp:
         self.listen_button.configure(text="Pause listening")
         log.info("manual drain requested")
 
+    def queue_video(self):
+        url = self.url_var.get().strip()
+        if not url:
+            return
+        try:
+            url = pipeline.validate_youtube_url(url)
+        except pipeline.PipelineError as exc:
+            messagebox.showerror("Not a YouTube URL", str(exc), parent=self.root)
+            return
+        if not self._ensure_worker():
+            return
+        prompt = pipeline.normalize_custom_prompt(
+            self.prompt_text.get("1.0", "end").strip()
+        )
+
+        def create():
+            try:
+                issue = self.worker.gh.create_issue(
+                    url, body=drain.build_issue_body(prompt)
+                )
+            except Exception as exc:
+                if not self.closing:
+                    self.root.after(
+                        0,
+                        lambda: messagebox.showerror(
+                            "Could not queue that video", str(exc), parent=self.root
+                        ),
+                    )
+                log.exception("could not queue %s", url)
+                return
+            log.info(
+                "queued #%s: %s%s",
+                issue["number"],
+                url,
+                " (custom prompt)" if prompt else "",
+            )
+            self.worker.resume()
+            self.worker.request_drain()
+            if not self.closing:
+                self.root.after(0, self._clear_add_form)
+
+        threading.Thread(target=create, daemon=True, name="queue-video").start()
+
+    def _clear_add_form(self):
+        self.url_var.set("")
+        self.prompt_text.delete("1.0", "end")
+        self.listen_button.configure(text="Pause listening")
+        self.refresh_queue()
+
+    def _start_lan_server(self):
+        """Serve the web GUI to other PCs on the network, on our worker."""
+        if self.lan_started or not self.worker:
+            return
+        self.lan_started = True
+        dashboard.attach_worker(self.worker, summary_dir=self.folder_var.get())
+        try:
+            _thread, url = dashboard.serve_in_thread()
+        except Exception as exc:
+            self.lan_var.set(f"Web GUI unavailable: {exc}")
+            log.exception("could not start the LAN web server")
+            return
+        self.lan_url = url
+        self.lan_var.set(f"Web GUI for other PCs: {url}")
+        self.lan_open_button.configure(state="normal")
+        self.lan_copy_button.configure(state="normal")
+        log.info("LAN web GUI serving at %s", url)
+
+    def open_lan_url(self):
+        if self.lan_url:
+            webbrowser.open(self.lan_url)
+
+    def copy_lan_url(self):
+        if not self.lan_url:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.lan_url)
+        log.info("copied %s to the clipboard", self.lan_url)
+
     def choose_folder(self):
         old = Path(self.folder_var.get()).expanduser()
         chosen = filedialog.askdirectory(
@@ -356,6 +487,7 @@ class ContentSummarizerApp:
             return
         self.folder_var.set(str(new))
         self._save_settings()
+        dashboard.set_summary_dir(new)  # keep the web reader on the same folder
         if self.worker:
             self.worker.configure(output_dir=str(new))
             self._sync_repository_summaries(new)
@@ -430,7 +562,7 @@ class ContentSummarizerApp:
         self.queue_tree.delete(*self.queue_tree.get_children())
         self.queue_links.clear()
         if error:
-            self.queue_tree.insert("", "end", values=("", "Error", error))
+            self.queue_tree.insert("", "end", values=("", "Error", _one_line(error)))
             return
         for issue in issues:
             labels = {label["name"] for label in issue.get("labels", [])}
@@ -493,10 +625,10 @@ class ContentSummarizerApp:
             listening = bool(snapshot.get("listening"))
             self.status_var.set(
                 ("Listening — " if listening else "Paused — ")
-                + str(snapshot.get("state", ""))
+                + _one_line(snapshot.get("state", ""), 60)
             )
             last_poll = snapshot.get("last_poll")
-            result = snapshot.get("last_result") or "waiting for first poll"
+            result = _one_line(snapshot.get("last_result") or "waiting for first poll")
             if last_poll:
                 age = max(0, int(time.time() - float(last_poll)))
                 self.last_poll_var.set(f"Last poll {age}s ago · {result}")
@@ -531,12 +663,49 @@ class ContentSummarizerApp:
         self.root.destroy()
 
 
+def _smoke_test_lan_server():
+    """Serve the web UI on an ephemeral port and fetch a page from it."""
+    import urllib.request
+
+    class _StubWorker:  # enough surface for the home page to render
+        poll_seconds = 0
+        gh = None
+
+        def snapshot(self):
+            return {
+                "state": "smoke test",
+                "last_poll": None,
+                "last_result": "",
+                "ok_total": 0,
+                "failed_total": 0,
+            }
+
+    dashboard.attach_worker(_StubWorker(), summary_dir=str(data_dir()))
+    _thread, url = dashboard.serve_in_thread(host="127.0.0.1", port=0)
+    port = url.rsplit(":", 1)[1]
+    deadline = time.monotonic() + 20
+    while True:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as resp:
+                body = resp.read().decode("utf-8", "replace")
+            break
+        except Exception:
+            if time.monotonic() > deadline:
+                raise RuntimeError("bundled web server never answered")
+            time.sleep(0.25)
+    if 'name="prompt"' not in body:
+        raise RuntimeError("the web page is missing the AI prompt box")
+
+
 def main():
     load_runtime_env()
     if "--smoke-test" in sys.argv:
         version = drain.pipeline._run_yt_dlp(["--version"], timeout=30)
         if not version.stdout.strip():
             raise RuntimeError("bundled yt-dlp did not return a version")
+        # uvicorn imports its loop/protocol modules by name at runtime, so a
+        # bundling mistake only shows up when the server actually serves.
+        _smoke_test_lan_server()
         root = tk.Tk()
         root.withdraw()
         root.update_idletasks()

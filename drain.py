@@ -43,6 +43,32 @@ def failure_message(exc, limit=1500):
     return text or type(exc).__name__
 
 
+def response_error(resp, limit=300):
+    """Condense a failed GitHub response into one short, displayable line.
+
+    During an outage GitHub answers with a full HTML page (its "Unicorn!"
+    screen), not JSON. Putting that whole document in the exception is what
+    flooded the status line and the activity log, so keep only the gist.
+    """
+    detail = ""
+    try:
+        payload = resp.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        # Normal API errors are JSON: {"message": "...", "documentation_url": ...}
+        detail = str(payload.get("message") or "").strip()
+    if not detail:
+        text = (resp.text or "").strip()
+        if re.match(r"\s*(<!doctype html|<html)", text[:200], re.IGNORECASE):
+            detail = "GitHub returned an HTML error page (service outage)"
+        else:
+            detail = " ".join(text.split())
+    if len(detail) > limit:
+        detail = detail[: limit - 1] + "…"
+    return detail or resp.reason or "no detail"
+
+
 def _require_env(name):
     value = os.environ.get(name)
     if not value:
@@ -71,7 +97,8 @@ class GitHub:
         resp = self.session.request(method, self._url(path), timeout=30, **kwargs)
         if not resp.ok:
             raise RuntimeError(
-                f"GitHub {method} {path} failed ({resp.status_code}): {resp.text}"
+                f"GitHub {method} {path} failed ({resp.status_code}): "
+                f"{response_error(resp)}"
             )
         return resp
 
@@ -100,8 +127,11 @@ class GitHub:
             page += 1
         return issues
 
-    def create_issue(self, title):
-        return self._request("POST", "issues", json={"title": title}).json()
+    def create_issue(self, title, body=None):
+        payload = {"title": title}
+        if body:
+            payload["body"] = body
+        return self._request("POST", "issues", json=payload).json()
 
     def comment(self, number, body):
         self._request("POST", f"issues/{number}/comments", json={"body": body})
@@ -126,7 +156,8 @@ class GitHub:
         )
         if not resp.ok and resp.status_code != 404:  # 404 = label already gone
             raise RuntimeError(
-                f"GitHub DELETE label {name} failed ({resp.status_code}): {resp.text}"
+                f"GitHub DELETE label {name} failed ({resp.status_code}): "
+                f"{response_error(resp)}"
             )
 
     def close_issue(self, number):
@@ -161,6 +192,46 @@ class GitHub:
         payload = self._request("GET", f"contents/{path}").json()
         encoded = (payload.get("content") or "").replace("\n", "")
         return base64.b64decode(encoded).decode("utf-8")
+
+
+# A per-video AI instruction travels to the drainer in the issue BODY (the title
+# is always just the URL). The fence keeps the prompt intact and readable on
+# github.com; a body with no marker at all is taken as the prompt verbatim, so a
+# prompt typed straight into the iOS Shortcut or the GitHub UI still works.
+PROMPT_MARKER = "<!-- content-summarizer:prompt -->"
+_PROMPT_RE = re.compile(
+    # The fence grows past three backticks when the prompt itself contains a
+    # code fence, so match its exact width and require the same width to close.
+    re.escape(PROMPT_MARKER) + r"\s*(`{3,})(?:\w+)?[ \t]*\n(.*?)\n?\1",
+    re.DOTALL,
+)
+
+
+def build_issue_body(prompt):
+    """Render a custom prompt into an issue body, or return None when empty."""
+    prompt = (prompt or "").strip()
+    if not prompt:
+        return None
+    # A fenced block means backticks/markdown in the prompt can't break parsing.
+    fence = "`" * max(3, max((len(m) for m in re.findall(r"`+", prompt)), default=0) + 1)
+    return (
+        "**Custom prompt for this summary**\n\n"
+        f"{PROMPT_MARKER}\n{fence}text\n{prompt}\n{fence}\n"
+    )
+
+
+def parse_issue_prompt(body):
+    """Extract the custom prompt from an issue body; '' when there is none."""
+    text = (body or "").strip()
+    if not text:
+        return ""
+    match = _PROMPT_RE.search(text)
+    if match:
+        return match.group(2).strip()
+    if PROMPT_MARKER in text:
+        # Marked, but the fence was mangled (hand-edited on github.com).
+        return text.split(PROMPT_MARKER, 1)[1].strip().strip("`").strip()
+    return text
 
 
 _SLUG_STRIP = re.compile(r"[^\w\s-]")
@@ -235,13 +306,17 @@ def process_issue(gh, issue, force_whisper, *, detail=None, output_dir=None):
     """Summarize one issue's video, commit it, comment, and close the issue."""
     number = issue["number"]
     url = pipeline.validate_youtube_url(issue["title"])
-    log.info("issue #%s: %s", number, url)
+    custom_prompt = parse_issue_prompt(issue.get("body"))
+    log.info(
+        "issue #%s: %s%s", number, url, " (custom prompt)" if custom_prompt else ""
+    )
 
     detail = normalize_detail(detail or os.environ.get("SUMMARY_DETAIL", "simple"))
     result = pipeline.summarize_video(
         url,
         force_whisper=force_whisper,
         detail=detail,
+        custom_prompt=custom_prompt,
     )
     filename = summary_filename(result["title"], result.get("id"), number)
     repo_path = f"{SUMMARY_DIR}/{filename}"

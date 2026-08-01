@@ -38,6 +38,11 @@ load_dotenv()
 SUMMARY_DIR = os.path.join(drain.REPO_DIR, "summaries")
 _STEM_RE = re.compile(r"^[-\w]+$")
 
+# When the desktop app hosts this UI it owns the Worker and the summary folder,
+# so we serve its objects instead of building a second (queue-racing) worker.
+_external_worker = False
+_summary_dir_override: str | None = None
+
 # Viewer mode: run the dashboard WITHOUT its polling worker, so it coexists
 # with another drainer (e.g. a self-hosted GitHub Actions runner) instead of
 # double-processing the queue. The UI still lists the queue, adds videos, and
@@ -56,6 +61,29 @@ SUMMARY_PULL_SECONDS = int(os.environ.get("SUMMARY_PULL_SECONDS") or 60)
 worker: Worker | None = None
 
 
+def attach_worker(existing: Worker, summary_dir=None):
+    """Host this UI on someone else's Worker (the desktop app embeds it).
+
+    The caller already runs the drain loop and owns the summary folder, so
+    lifespan() must not start a second worker.
+    """
+    global worker, _external_worker, _summary_dir_override
+    worker = existing
+    _external_worker = True
+    if summary_dir:
+        _summary_dir_override = str(summary_dir)
+
+
+def set_summary_dir(path):
+    """Point the reader at the folder the desktop app is saving into."""
+    global _summary_dir_override
+    _summary_dir_override = str(path)
+
+
+def _summary_dir():
+    return _summary_dir_override or SUMMARY_DIR
+
+
 def _pull_loop():
     while True:
         time.sleep(SUMMARY_PULL_SECONDS)
@@ -65,6 +93,9 @@ def _pull_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global worker
+    if _external_worker:
+        yield  # the host app owns the worker, the pull loop, and the folder
+        return
     worker = Worker()
     drain.sync_repo()  # refresh summaries on startup
     threading.Thread(target=_pull_loop, daemon=True, name="summary-pull").start()
@@ -92,8 +123,10 @@ h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .04em;
 .card { background: #fff; border: 1px solid #e3e3e6; border-radius: 10px;
         padding: 14px 18px; margin: 10px 0; }
 .muted { color: #777; font-size: 13px; }
-input[type=text] { width: 100%; max-width: 520px; padding: 8px 10px;
+input[type=text], textarea { width: 100%; max-width: 520px; padding: 8px 10px;
         border: 1px solid #ccc; border-radius: 8px; background: inherit; color: inherit; }
+textarea { font: inherit; resize: vertical; min-height: 62px; margin-top: 8px; }
+.field-hint { margin: 6px 0 10px; }
 button { padding: 7px 14px; border: 0; border-radius: 8px; background: #2563eb;
          color: #fff; cursor: pointer; font-size: 14px; }
 button:hover { background: #1d4ed8; }
@@ -120,7 +153,7 @@ a:hover { text-decoration: underline; }
   .card, .prose { background: #1c1c1f; border-color: #333338; }
   h2 { color: #9a9aa3; }
   .muted { color: #94949c; }
-  input[type=text] { border-color: #44444a; }
+  input[type=text], textarea { border-color: #44444a; }
   a { color: #7aa2ff; }
 }
 """
@@ -160,8 +193,8 @@ def _summary_title(text):
 
 
 def _summary_files():
-    files = glob.glob(os.path.join(SUMMARY_DIR, "*.txt"))
-    files.extend(glob.glob(os.path.join(SUMMARY_DIR, "*.md")))
+    files = glob.glob(os.path.join(_summary_dir(), "*.txt"))
+    files.extend(glob.glob(os.path.join(_summary_dir(), "*.md")))
     return sorted(
         files,
         key=os.path.getmtime,
@@ -281,6 +314,8 @@ def home():
 <div class="card">
   <form method="post" action="/queue">
     <input type="text" name="url" placeholder="https://www.youtube.com/watch?v=..." required>
+    <textarea name="prompt" rows="3" placeholder="Optional: tell the AI how to summarize this one — e.g. &quot;focus on the investing advice and list every ticker mentioned&quot;"></textarea>
+    <p class="muted field-hint">Leave the prompt empty for the normal summary.</p>
     <button>Queue it</button>
   </form>
 </div>
@@ -304,8 +339,8 @@ def home():
 def summary_page(stem: str):
     if not _STEM_RE.match(stem):
         return HTMLResponse("Bad name", status_code=400)
-    txt_path = os.path.join(SUMMARY_DIR, stem + ".txt")
-    md_path = os.path.join(SUMMARY_DIR, stem + ".md")
+    txt_path = os.path.join(_summary_dir(), stem + ".txt")
+    md_path = os.path.join(_summary_dir(), stem + ".md")
     path = txt_path if os.path.isfile(txt_path) else md_path
     if not os.path.isfile(path):
         return HTMLResponse(
@@ -367,7 +402,7 @@ def search(q: str = ""):
 
 
 @app.post("/queue")
-def queue_video(url: str = Form(...)):
+def queue_video(url: str = Form(...), prompt: str = Form("")):
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         return HTMLResponse(
@@ -378,7 +413,8 @@ def queue_video(url: str = Form(...)):
             ),
             status_code=400,
         )
-    worker.gh.create_issue(url)
+    prompt = pipeline.normalize_custom_prompt(prompt)
+    worker.gh.create_issue(url, body=drain.build_issue_body(prompt))
     worker.request_drain()
     return RedirectResponse("/", status_code=303)
 
@@ -450,6 +486,44 @@ def main():
     import uvicorn
 
     uvicorn.run(app, host=host, port=port, log_config=None)
+
+
+def serve_in_thread(host=None, port=None):
+    """Serve the web UI on a daemon thread; return (thread, url).
+
+    Used by the desktop app, which has already called attach_worker(). Binding
+    0.0.0.0 is what makes the UI reachable from other PCs on the network.
+    """
+    import socket
+
+    import uvicorn
+
+    host = host or os.environ.get("DASHBOARD_HOST", "0.0.0.0")
+    port = int(port or os.environ.get("DASHBOARD_PORT") or 8787)
+
+    # Bind here rather than inside the thread: a port clash must surface to the
+    # caller as an exception, not die silently on a background thread and leave
+    # the UI advertising a URL that answers nothing.
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind((host, port))
+        sock.listen(128)
+        sock.set_inheritable(True)
+        port = sock.getsockname()[1]  # resolves port 0 to the real one
+    except OSError:
+        sock.close()
+        raise
+
+    config = uvicorn.Config(app, host=host, port=port, log_config=None)
+    server = uvicorn.Server(config)
+    # uvicorn installs SIGINT/SIGTERM handlers, which only the main thread may
+    # do — Tk owns the main thread here, so the app closing stops us instead.
+    server.install_signal_handlers = False
+    thread = threading.Thread(
+        target=lambda: server.run(sockets=[sock]), daemon=True, name="lan-dashboard"
+    )
+    thread.start()
+    return thread, f"http://{_lan_ip()}:{port}"
 
 
 def _lan_ip():

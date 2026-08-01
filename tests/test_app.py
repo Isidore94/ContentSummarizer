@@ -12,6 +12,92 @@ import drain
 import pipeline
 
 
+class CustomPromptTests(unittest.TestCase):
+    def test_prompt_survives_a_round_trip_through_the_issue_body(self):
+        prompt = "Focus on the investing advice and list every ticker mentioned."
+        body = drain.build_issue_body(prompt)
+        self.assertIn(drain.PROMPT_MARKER, body)
+        self.assertEqual(drain.parse_issue_prompt(body), prompt)
+
+    def test_prompt_containing_a_code_fence_round_trips(self):
+        prompt = "Summarize, then show:\n```python\nprint('hi')\n```\nNothing else."
+        self.assertEqual(
+            drain.parse_issue_prompt(drain.build_issue_body(prompt)), prompt
+        )
+
+    def test_empty_prompt_produces_no_issue_body(self):
+        self.assertIsNone(drain.build_issue_body("   "))
+        self.assertIsNone(drain.build_issue_body(None))
+        self.assertEqual(drain.parse_issue_prompt(None), "")
+        self.assertEqual(drain.parse_issue_prompt(""), "")
+
+    def test_unmarked_body_is_taken_as_the_prompt(self):
+        # A prompt typed straight into the iOS Shortcut or on github.com.
+        self.assertEqual(drain.parse_issue_prompt("  Just the key numbers.  "),
+                         "Just the key numbers.")
+
+    def test_long_prompts_are_bounded(self):
+        prompt = pipeline.normalize_custom_prompt("x" * 5_000)
+        self.assertLessEqual(len(prompt), pipeline.MAX_CUSTOM_PROMPT_CHARS + 1)
+
+    def test_custom_prompt_reaches_the_model_and_plain_summaries_are_unchanged(self):
+        with_prompt = pipeline._summary_prompt("hello", "simple", "Only the numbers.")
+        self.assertIn("Only the numbers.", with_prompt)
+        self.assertIn("hello", with_prompt)
+
+        without = pipeline._summary_prompt("hello", "simple")
+        self.assertNotIn("ADDITIONAL INSTRUCTIONS", without)
+
+
+class GitHubErrorTests(unittest.TestCase):
+    """GitHub answers outages with a full HTML page; it must not reach the UI."""
+
+    class _Resp:
+        def __init__(self, text, status_code=503, payload=None):
+            self.text = text
+            self.status_code = status_code
+            self.reason = "Service Unavailable"
+            self.ok = False
+            self._payload = payload
+
+        def json(self):
+            if self._payload is None:
+                raise ValueError("not json")
+            return self._payload
+
+    UNICORN = (
+        "<!DOCTYPE html>\n<!--\n\nHello future GitHubber! I bet you're here to "
+        "remove those nasty inline styles,\nDRY up these templates and make 'em "
+        "nice and re-usable, right?\n\nPlease, don't.\n\n-->\n<html>\n<head>\n"
+        "<title>Unicorn! &middot; GitHub</title>\n<style>body { margin: 0; }</style>\n"
+        "</head>\n<body>" + "<p>filler</p>" * 400 + "</body>\n</html>\n"
+    )
+
+    def test_html_outage_page_becomes_one_short_line(self):
+        detail = drain.response_error(self._Resp(self.UNICORN))
+        self.assertNotIn("GitHubber", detail)
+        self.assertNotIn("<", detail)
+        self.assertLessEqual(len(detail), 300)
+        self.assertIn("outage", detail)
+
+    def test_json_api_errors_keep_their_message(self):
+        detail = drain.response_error(
+            self._Resp('{"message": "Bad credentials"}', 401,
+                       payload={"message": "Bad credentials"})
+        )
+        self.assertEqual(detail, "Bad credentials")
+
+    def test_long_plain_text_error_is_truncated(self):
+        detail = drain.response_error(self._Resp("boom " * 500))
+        self.assertLessEqual(len(detail), 300)
+
+    def test_gui_labels_never_grow_unbounded(self):
+        import desktop_gui
+
+        self.assertLessEqual(len(desktop_gui._one_line(self.UNICORN)), 160)
+        self.assertNotIn("\n", desktop_gui._one_line(self.UNICORN))
+
+
 class SummaryConfigurationTests(unittest.TestCase):
     def test_detail_levels_are_distinct(self):
         self.assertEqual(pipeline.normalize_summary_detail("Simple"), "simple")
@@ -25,6 +111,25 @@ class SummaryConfigurationTests(unittest.TestCase):
     def test_unknown_pipeline_detail_is_rejected(self):
         with self.assertRaises(pipeline.PipelineError):
             pipeline.normalize_summary_detail("enormous")
+
+    def test_prompts_are_learning_first(self):
+        """Summaries must teach the content, not mention topics (Aaron's prime
+        directive). Every level keeps its Bad/Good steering pair, the
+        explain-without-watching test, and the custom-prompt-friendly wording."""
+        self.assertIn("teach", pipeline._SUMMARY_SYSTEM)
+        self.assertIn("without watching", pipeline._SUMMARY_SYSTEM)
+        for detail, spec in pipeline.SUMMARY_DETAILS.items():
+            text = spec["instructions"]
+            self.assertIn("Bad (topic mention):", text, detail)
+            self.assertIn("Good (the actual lesson):", text, detail)
+            self.assertIn("without watching", text, detail)
+            self.assertIn("CORE IDEA", text, detail)
+            self.assertIn(
+                "unless the requester's added instructions say otherwise",
+                text,
+                detail,
+            )
+            self.assertIn("never outside facts", text, detail)
 
     def test_settings_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
