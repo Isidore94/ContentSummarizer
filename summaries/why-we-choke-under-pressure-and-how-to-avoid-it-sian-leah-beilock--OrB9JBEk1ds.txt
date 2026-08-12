@@ -1,0 +1,29 @@
+Why we choke under pressure -- and how to avoid it | Sian Leah Beilock
+https://youtube.com/watch?v=OrB9JBEk1ds&si=VYtESi3xG2n3azKR
+
+CORE IDEA
+The central thesis is that under pressure, individuals often fail to perform to their potential due to over-attention, focusing excessively on performance details that should be automatic. This matters because understanding and addressing this can help improve performance across various high-stakes situations, from sports to academic and professional environments.
+
+ARGUMENTS & LESSONS
+- People often choke under pressure because they worry about potential outcomes and try to consciously control tasks that should be automatic, leading to over-attention and decreased performance.
+- The concept of "paralysis by analysis" occurs when excessive focus on detailed aspects of a task, such as the side of the foot used in dribbling, makes performance slower and more error-prone.
+- Sports professionals like Tim Duncan and choreographer George Balanchine suggest that thinking too much during performance leads to mistakes, highlighting the value of automaticity.
+- To perform better under pressure, one can use techniques like distracting the prefrontal cortex (e.g., singing or focusing on a physical action such as moving the pinky toe) and practicing under conditions similar to actual performance scenarios.
+- Preparation methods, such as writing down worries before stressful tasks, can help reduce mental distractions and improve performance.
+- Environmental factors, including the influences of parents, teachers, and societal stereotypes, can affect one's performance and anxiety, particularly in subjects like math, where anxiety is often socially acceptable and more prevalent among women.
+- Encouraging practices like "bedtime math" activities not only improve children's attitudes towards math but substantially enhance their performance, demonstrating that engaging with learning in a positive way can overcome environmental limitations.
+- Personal experiences of failure can be overcome by changing study and practice techniques to simulate stress conditions, which can quiet anxiety and improve outcomes, as evidenced by the success in competitive academic scenarios after adapting study strategies.
+
+MENTAL MODELS & DEFINITIONS
+- Paralysis by Analysis: A situation where over-attention to the precise details of an action impairs performance, as people focus too much on each step instead of allowing automatic processes.
+- Prefrontal Cortex: The part of the brain involved in complex cognitive behavior, decision-making, and moderating social behavior; in pressure situations, it can focus on irrelevant details, leading to performance issues.
+
+EVIDENCE & NUMBERS
+- A study on college soccer players showed that dribbling while focusing on irrelevant details like which side of the foot contacts the ball results in slower and more error-prone performance, illustrating the impact of over-attention.
+- Research on math anxiety demonstrates that simply the anticipation of engaging with math can activate brain regions associated with pain, suggesting the deep-seated nature of the anxiety.
+- A link between math anxiety in early education and teachers' anxieties indicates that having anxious teachers leads to less math learning, with stronger effects observed among girls due to same-sex modeling tendencies.
+
+COUNTERPOINTS & LIMITS
+- Assumes that all pressure-induced performance issues stem from over-attention; other psychological or environmental factors may also play roles.
+- The effectiveness of distractions and pre-conditioning techniques might vary among individuals due to personal differences in anxiety responses and coping mechanisms.
+- The argument that societal influences affect individual performance is supported by anecdotal evidence but may need broader support or studies for universality beyond specific demographics or cultural contexts.
