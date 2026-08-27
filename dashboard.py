@@ -1,8 +1,9 @@
 """dashboard.py — LAN web dashboard + always-on worker (mini-PC mode).
 
 Runs the polling worker (worker.py) in a background thread and serves a small
-web UI on the local network: see the queue, paste a URL to queue a video,
-drain now, retry failures, and browse/search summaries.
+web UI on the local network: see the queue, paste a URL to queue a video as a
+summary or as a plain transcript, drain now, retry failures, and browse/search
+both the summaries and the raw transcripts they were built from.
 
 Start with `python dashboard.py`. Configure with DASHBOARD_HOST /
 DASHBOARD_PORT in .env (defaults 0.0.0.0:8787). Logs go to worker.log next to
@@ -244,6 +245,7 @@ form.inline button, .btn-sm { min-height: 30px; padding: 0 11px; font-size: 12.5
 .badge.fail { background: var(--err-soft); color: var(--err); }
 .badge.on { background: var(--ok-soft); color: var(--ok); }
 .badge.off { background: var(--surface-2); color: var(--ink-faint); }
+.badge.raw { background: var(--surface-2); color: var(--ink-soft); }
 
 .seg { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .seg form { display: inline-flex; }
@@ -251,6 +253,17 @@ form.inline button, .btn-sm { min-height: 30px; padding: 0 11px; font-size: 12.5
               background: var(--surface-2); color: var(--ink-soft); border-color: var(--line); }
 .seg button.active { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
 .seg .btn { min-height: 34px; font-size: 13px; }
+
+/* The output choice is a radio group, not a set of submit buttons: it changes
+   what the form will do, so it must not act until the form is submitted. */
+.choice { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0 0; }
+.choice label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+  min-height: 40px; padding: 0 15px; font-size: 14px; font-weight: 550;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface-2); color: var(--ink-soft); }
+.choice label:has(input:checked) { background: var(--brand-soft);
+  border-color: var(--brand); color: var(--ink); }
+.choice input { accent-color: var(--brand); margin: 0; }
 
 /* Rows, not bullets: a title on the left and its date on the right, separated by
    hairlines. Bulleted lines of "title date title date" were the worst of the clutter. */
@@ -436,6 +449,36 @@ def _summary_files():
     )
 
 
+def _transcript_dir():
+    """Raw transcripts sit in a subfolder of the summary folder (see drain.py)."""
+    return os.path.join(_summary_dir(), drain.TRANSCRIPT_DIR)
+
+
+def _transcript_files():
+    return sorted(
+        glob.glob(os.path.join(_transcript_dir(), "*.txt")),
+        key=os.path.getmtime,
+        reverse=True,
+    )
+
+
+def _transcript_path(stem):
+    """The transcript file for a summary stem, or None when there isn't one.
+
+    Transcripts share their summary's filename, so the two are always one lookup
+    apart — that pairing is what lets a summary page link to its own source.
+    """
+    path = os.path.join(_transcript_dir(), stem + ".txt")
+    return path if os.path.isfile(path) else None
+
+
+def _has_summary(stem):
+    return any(
+        os.path.isfile(os.path.join(_summary_dir(), stem + ext))
+        for ext in (".txt", ".md")
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(cs_refresh: str = Cookie(default="0")):
     refresh = _refresh_seconds(cs_refresh)
@@ -487,6 +530,30 @@ def home(cs_refresh: str = Cookie(default="0")):
         '<ul class="list">' + "".join(items) + "</ul>"
         if items
         else '<p class="empty">No summaries yet.</p>'
+    )
+
+    transcript_items = []
+    for path in _transcript_files()[:20]:
+        stem = os.path.splitext(os.path.basename(path))[0]
+        try:
+            title = _summary_title(open(path, encoding="utf-8").read()) or stem
+        except OSError:
+            title = stem
+        date = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(path)))
+        # Marking the ones with no summary answers the only question this list
+        # raises: which of these were transcript-only jobs?
+        badge = (
+            "" if _has_summary(stem) else ' <span class="badge raw">raw only</span>'
+        )
+        transcript_items.append(
+            f'<li><a href="/t/{stem}">{html.escape(title)}</a>{badge}'
+            f'<span class="when">{date}</span></li>'
+        )
+    transcripts_html = (
+        '<ul class="list">' + "".join(transcript_items) + "</ul>"
+        if transcript_items
+        else '<p class="empty">No transcripts yet. Every video processed from now '
+        "on keeps one.</p>"
     )
 
     provider = os.environ.get("SUMMARY_PROVIDER", "openai")
@@ -572,8 +639,15 @@ def home(cs_refresh: str = Cookie(default="0")):
 <div class="card">
   <form method="post" action="/queue">
     <input type="text" name="url" placeholder="https://www.youtube.com/watch?v=..." required>
+    <div class="choice">
+      <label><input type="radio" name="mode" value="summary" checked> AI summary</label>
+      <label><input type="radio" name="mode" value="raw"> Transcript only</label>
+    </div>
+    <p class="muted field-hint">Transcript only skips the AI entirely: no summary,
+      no API cost, just every word that was said.</p>
     <textarea name="prompt" rows="3" placeholder="Optional: tell the AI how to summarize this one — e.g. &quot;focus on the investing advice and list every ticker mentioned&quot;"></textarea>
-    <p class="muted field-hint">Leave the prompt empty for the normal summary.</p>
+    <p class="muted field-hint">Leave the prompt empty for the normal summary.
+      It is ignored for a transcript-only job.</p>
     <button>Queue it</button>
   </form>
 </div>
@@ -584,11 +658,19 @@ def home(cs_refresh: str = Cookie(default="0")):
 <h2>Summaries</h2>
 <div class="card">
   <form class="searchbar" method="get" action="/search">
-    <input type="search" name="q" placeholder="Search summaries&hellip;" aria-label="Search summaries">
+    <input type="search" name="q" placeholder="Search summaries and transcripts&hellip;" aria-label="Search summaries and transcripts">
     <button>Search</button>
   </form>
   <hr class="card-divider">
   {summaries_html}
+</div>
+
+<h2>Transcripts</h2>
+<div class="card">
+  <p class="muted" style="margin-top:0">The full text each summary was written
+    from, kept on this machine.</p>
+  <hr class="card-divider">
+  {transcripts_html}
 </div>
 """
     return _page("ContentSummarizer", body, refresh=refresh)
@@ -624,10 +706,50 @@ def summary_page(stem: str):
         # Model output is untrusted; escaping first prevents raw-HTML/script
         # injection while retaining the useful Markdown structure.
         body = md.markdown(html.escape(text), extensions=["extra"])
+    # The one link worth having on a summary: what it was actually built from.
+    source = (
+        f' &middot; <a href="/t/{stem}">Read the full transcript</a>'
+        if _transcript_path(stem)
+        else ""
+    )
     return _page(
         title,
-        f'<p class="backlink"><a href="/">&larr; Back</a></p>'
+        f'<p class="backlink"><a href="/">&larr; Back</a>{source}</p>'
         f'<article class="prose">{body}</article>',
+    )
+
+
+@app.get("/t/{stem}", response_class=HTMLResponse)
+def transcript_page(stem: str):
+    """The raw pre-summary text, shown as the document it is."""
+    if not _STEM_RE.match(stem):
+        return HTMLResponse("Bad name", status_code=400)
+    path = _transcript_path(stem)
+    if not path:
+        return HTMLResponse(
+            _page(
+                "Not found",
+                '<div class="card"><p class="empty">No transcript saved for that '
+                "video. Only videos processed since transcripts were kept have "
+                "one.</p></div>"
+                '<p class="backlink" style="margin-top:18px">'
+                '<a href="/">&larr; Back</a></p>',
+            ),
+            status_code=404,
+        )
+    text = open(path, encoding="utf-8").read()
+    title = _summary_title(text) or stem
+    summary_link = (
+        f' &middot; <a href="/s/{stem}">Read the summary</a>'
+        if _has_summary(stem)
+        else ""
+    )
+    return _page(
+        f"Transcript: {title}",
+        f'<p class="backlink"><a href="/">&larr; Back</a>{summary_link}</p>'
+        f'<article class="prose"><h1>{html.escape(title)}</h1>'
+        f'<p class="muted">Full transcript &mdash; the text the summarizer reads.</p>'
+        f"<pre>{html.escape(_body_without_title(text, title))}</pre></article>",
     )
 
 
@@ -637,22 +759,31 @@ def search(q: str = ""):
     results = []
     if q:
         needle = q.lower()
-        for path in _summary_files():
+        # Transcripts are searched as well as summaries — a half-remembered
+        # phrase from a video is usually in the transcript and nowhere else. A
+        # summary wins when both match, so the readable version comes first.
+        seen = set()
+        for path, kind in [(p, "s") for p in _summary_files()] + [
+            (p, "t") for p in _transcript_files()
+        ]:
+            stem = os.path.splitext(os.path.basename(path))[0]
+            if (stem, kind) in seen or (kind == "t" and (stem, "s") in seen):
+                continue
             try:
                 text = open(path, encoding="utf-8").read()
             except OSError:
                 continue
-            if needle in text.lower():
-                stem = os.path.splitext(os.path.basename(path))[0]
-                line = next(
-                    (l for l in text.splitlines() if needle in l.lower()), ""
-                )
-                results.append((stem, _summary_title(text) or stem, line))
+            if needle not in text.lower():
+                continue
+            seen.add((stem, kind))
+            line = next((l for l in text.splitlines() if needle in l.lower()), "")
+            results.append((kind, stem, _summary_title(text) or stem, line))
 
     items = "".join(
-        f'<li><a href="/s/{stem}">{html.escape(title)}</a>'
-        f'<p class="snippet">{html.escape(line[:180])}</p></li>'
-        for stem, title, line in results
+        f'<li><a href="/{kind}/{stem}">{html.escape(title)}</a>'
+        + ('<span class="badge raw">transcript</span>' if kind == "t" else "")
+        + f'<p class="snippet">{html.escape(line[:180])}</p></li>'
+        for kind, stem, title, line in results
     )
     if items:
         count = len(results)
@@ -669,7 +800,8 @@ def search(q: str = ""):
 <div class="card">
   <form class="searchbar" method="get" action="/search">
     <input type="search" name="q" value="{html.escape(q, quote=True)}"
-           placeholder="Search summaries&hellip;" aria-label="Search summaries">
+           placeholder="Search summaries and transcripts&hellip;"
+           aria-label="Search summaries and transcripts">
     <button>Search</button>
   </form>
 </div>
@@ -679,7 +811,7 @@ def search(q: str = ""):
 
 
 @app.post("/queue")
-def queue_video(url: str = Form(...), prompt: str = Form("")):
+def queue_video(url: str = Form(...), prompt: str = Form(""), mode: str = Form("summary")):
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         return HTMLResponse(
@@ -691,8 +823,12 @@ def queue_video(url: str = Form(...), prompt: str = Form("")):
             ),
             status_code=400,
         )
+    try:
+        mode = pipeline.normalize_output_mode(mode)
+    except pipeline.PipelineError:
+        mode = "summary"  # a tampered form field is not a reason to lose the video
     prompt = pipeline.normalize_custom_prompt(prompt)
-    worker.gh.create_issue(url, body=drain.build_issue_body(prompt))
+    worker.gh.create_issue(url, body=drain.build_issue_body(prompt, mode))
     worker.request_drain()
     return RedirectResponse("/", status_code=303)
 

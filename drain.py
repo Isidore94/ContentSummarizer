@@ -1,10 +1,15 @@
 """drain.py — Drain the GitHub Issues queue and summarize each video.
 
 Run by Windows Task Scheduler. Lists open issues in the configured repo (each
-issue TITLE is a YouTube URL), runs the summarization pipeline on each, commits
-the resulting plain text to summaries/, pastes it as a closing comment,
-and closes the issue. A video that fails is logged and left open (so it isn't
-lost) with the error posted as a comment, and the batch continues.
+issue TITLE is a YouTube URL), runs the pipeline on each, commits the resulting
+plain text to summaries/, pastes it as a closing comment, and closes the issue.
+A video that fails is logged and left open (so it isn't lost) with the error
+posted as a comment, and the batch continues.
+
+Every job — summarized or not — also writes the full transcript it worked from
+to a transcripts/ folder beside the summaries. That file never leaves the
+machine: it is the raw material, kept so a thin or wrong summary can be checked
+against what was actually said.
 """
 
 from __future__ import annotations
@@ -27,7 +32,16 @@ log = logging.getLogger("drain")
 
 GITHUB_API = "https://api.github.com"
 SUMMARY_DIR = "summaries"
+# Raw transcripts live in a subfolder of wherever summaries are saved, so
+# choosing a Google Drive folder carries the logs along with the summaries and
+# there is never a second path to configure.
+TRANSCRIPT_DIR = "transcripts"
 REPO_DIR = str(executable_dir())
+
+# GitHub rejects an issue comment over 65,536 characters. A summary never comes
+# close; a raw transcript routinely does, so everything we post is bounded here
+# rather than discovered as a 422 halfway through a batch.
+MAX_COMMENT_CHARS = 60_000
 
 # Label put on issues that failed to process. The always-on worker skips
 # labeled issues until its retry window elapses (or the label is removed via
@@ -41,6 +55,19 @@ def failure_message(exc, limit=1500):
     if len(text) > limit:
         text = text[: limit - 1] + "…"
     return text or type(exc).__name__
+
+
+def bounded_comment(text, limit=MAX_COMMENT_CHARS):
+    """Trim a comment to what GitHub will accept, saying so where it cuts."""
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    keep = limit - 200
+    return (
+        text[:keep].rstrip()
+        + f"\n\n---\n\n_Truncated here: {keep:,} of {len(text):,} characters. "
+        "The complete text is saved on the machine that ran this job._\n"
+    )
 
 
 def response_error(resp, limit=300):
@@ -207,22 +234,57 @@ _PROMPT_RE = re.compile(
 )
 
 
-def build_issue_body(prompt):
-    """Render a custom prompt into an issue body, or return None when empty."""
+# The output mode rides along in the same body: "summary" (the default, so an
+# unmarked issue behaves exactly as it always has) or "raw", which skips the
+# model and delivers the transcript itself.
+MODE_MARKER = "<!-- content-summarizer:mode -->"
+MODE_HEADER = "**Transcript only — no AI summary.**"
+_MODE_RE = re.compile(re.escape(MODE_MARKER) + r"[ \t]*([A-Za-z-]+)")
+
+
+def build_issue_body(prompt, mode="summary"):
+    """Render the mode and any custom prompt into an issue body, or None.
+
+    None means "nothing worth saying": the plain summarize-this-video case,
+    which is still the common one.
+    """
+    mode = pipeline.normalize_output_mode(mode)
+    blocks = []
+    if mode != "summary":
+        blocks.append(f"{MODE_HEADER}\n\n{MODE_MARKER} {mode}\n")
     prompt = (prompt or "").strip()
-    if not prompt:
-        return None
-    # A fenced block means backticks/markdown in the prompt can't break parsing.
-    fence = "`" * max(3, max((len(m) for m in re.findall(r"`+", prompt)), default=0) + 1)
-    return (
-        "**Custom prompt for this summary**\n\n"
-        f"{PROMPT_MARKER}\n{fence}text\n{prompt}\n{fence}\n"
-    )
+    if prompt:
+        # A fenced block means backticks/markdown in the prompt can't break parsing.
+        fence = "`" * max(
+            3, max((len(m) for m in re.findall(r"`+", prompt)), default=0) + 1
+        )
+        blocks.append(
+            "**Custom prompt for this summary**\n\n"
+            f"{PROMPT_MARKER}\n{fence}text\n{prompt}\n{fence}\n"
+        )
+    return "\n".join(blocks) or None
+
+
+def parse_issue_mode(body):
+    """The output mode an issue asks for; "summary" unless it clearly says raw."""
+    match = _MODE_RE.search(body or "")
+    if not match:
+        return "summary"
+    try:
+        return pipeline.normalize_output_mode(match.group(1))
+    except pipeline.PipelineError:
+        log.warning("issue body asked for unknown mode %r; summarizing", match.group(1))
+        return "summary"
+
+
+def _without_mode_block(text):
+    """Drop the mode marker and its heading, so neither can pose as a prompt."""
+    return _MODE_RE.sub("", text).replace(MODE_HEADER, "")
 
 
 def parse_issue_prompt(body):
     """Extract the custom prompt from an issue body; '' when there is none."""
-    text = (body or "").strip()
+    text = _without_mode_block(body or "").strip()
     if not text:
         return ""
     match = _PROMPT_RE.search(text)
@@ -302,13 +364,23 @@ def sync_repo():
         log.warning("git pull failed: %s", exc)
 
 
+def transcript_dir(output_dir):
+    """Where raw transcripts are kept: a subfolder of the summary folder."""
+    return Path(output_dir).expanduser() / TRANSCRIPT_DIR
+
+
 def process_issue(gh, issue, force_whisper, *, detail=None, output_dir=None):
-    """Summarize one issue's video, commit it, comment, and close the issue."""
+    """Run one issue's video through the pipeline, publish it, and close it."""
     number = issue["number"]
     url = pipeline.validate_youtube_url(issue["title"])
     custom_prompt = parse_issue_prompt(issue.get("body"))
+    mode = parse_issue_mode(issue.get("body"))
     log.info(
-        "issue #%s: %s%s", number, url, " (custom prompt)" if custom_prompt else ""
+        "issue #%s [%s]: %s%s",
+        number,
+        mode,
+        url,
+        " (custom prompt)" if custom_prompt else "",
     )
 
     detail = normalize_detail(detail or os.environ.get("SUMMARY_DETAIL", "detailed"))
@@ -317,26 +389,53 @@ def process_issue(gh, issue, force_whisper, *, detail=None, output_dir=None):
         force_whisper=force_whisper,
         detail=detail,
         custom_prompt=custom_prompt,
+        mode=mode,
     )
     filename = summary_filename(result["title"], result.get("id"), number)
-    repo_path = f"{SUMMARY_DIR}/{filename}"
     destination = output_dir or os.environ.get("SUMMARY_FOLDER") or os.path.join(
         REPO_DIR, SUMMARY_DIR
     )
 
-    local_path = write_summary(destination, filename, result["text"])
-
-    gh.commit_file(
-        repo_path,
-        result["text"],
-        f"Add {detail} summary: {result['title']}",
+    # Written for every job, whichever output was asked for: this is the whole
+    # text the summary came from, and it stays on this machine. Same filename as
+    # the summary, so a summary and its source are one folder apart.
+    transcript_path = write_summary(
+        transcript_dir(destination), filename, result["transcript_text"]
     )
-    gh.comment(number, result["text"])
+
+    local_path = None
+    repo_path = None
+    if mode == "summary":
+        local_path = write_summary(destination, filename, result["text"])
+        repo_path = f"{SUMMARY_DIR}/{filename}"
+        gh.commit_file(
+            repo_path,
+            result["text"],
+            f"Add {detail} summary: {result['title']}",
+        )
+        gh.comment(number, bounded_comment(result["text"]))
+    else:
+        # Raw transcripts are not committed to the repo — they are bulk source
+        # text, kept locally on purpose. The comment carries as much as GitHub
+        # will take so the requester still gets something back on their phone.
+        gh.comment(
+            number,
+            bounded_comment(
+                f"📄 **Transcript only** — no summary was generated.\n\n"
+                f"{result['text']}"
+            ),
+        )
     gh.close_issue(number)
     if any(l["name"] == SKIP_LABEL for l in issue.get("labels", [])):
         gh.remove_label(number, SKIP_LABEL)  # succeeded on retry
-    log.info("issue #%s done -> %s", number, local_path)
-    return {"result": result, "repo_path": repo_path, "local_path": str(local_path)}
+    log.info("issue #%s done -> %s", number, local_path or transcript_path)
+    return {
+        "result": result,
+        "mode": mode,
+        "repo_path": repo_path,
+        "local_path": str(local_path) if local_path else None,
+        "transcript_path": str(transcript_path),
+    }
 
 
 def main():

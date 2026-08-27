@@ -401,5 +401,241 @@ class WebRefreshTests(unittest.TestCase):
         self.client.post("/settings/refresh", data={"seconds": "0"})
 
 
+class TranscriptTests(unittest.TestCase):
+    """The transcript is the whole text a summary is built from.
+
+    Before this it existed only in memory for the length of one API call: a thin
+    or wrong summary could never be checked against what was actually said, and
+    a video that only needed its words could not be had without paying a model
+    to rewrite them.
+    """
+
+    METADATA = {"id": "abc123", "title": "A Talk"}
+    URL = "https://www.youtube.com/watch?v=abc123"
+
+    def _patched(self, summarize):
+        """A run with the network and the model stubbed out, shape intact."""
+        return mock.patch.multiple(
+            pipeline,
+            get_metadata=lambda url: dict(self.METADATA),
+            fetch_transcript=lambda url, force_whisper=False: {
+                "text": "every word of it",
+                "source": "manual captions",
+            },
+            summarize=summarize,
+        )
+
+    def test_a_mode_is_either_summarize_or_do_not(self):
+        for value in ("summary", "Summary", " summarize ", None, ""):
+            self.assertEqual(pipeline.normalize_output_mode(value), "summary")
+        for value in ("raw", "RAW", "transcript", "transcript-only"):
+            self.assertEqual(pipeline.normalize_output_mode(value), "raw")
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.normalize_output_mode("summarise-ish")
+
+    def test_raw_mode_never_calls_the_model(self):
+        def refuse(*args, **kwargs):
+            raise AssertionError("raw mode must not call the summarizer")
+
+        with self._patched(refuse):
+            result = pipeline.summarize_video(self.URL, mode="raw")
+        self.assertEqual(result["mode"], "raw")
+        self.assertIn("every word of it", result["text"])
+        self.assertIn("A Talk", result["text"])
+
+    def test_a_summary_still_carries_the_transcript_it_came_from(self):
+        with self._patched(lambda transcript, **kwargs: "The gist."):
+            result = pipeline.summarize_video(self.URL, mode="summary")
+        self.assertIn("The gist.", result["text"])
+        self.assertNotIn("every word of it", result["text"])  # a summary is a summary
+        self.assertEqual(result["transcript"], "every word of it")
+        self.assertIn("every word of it", result["transcript_text"])
+        self.assertIn("manual captions", result["transcript_text"])
+
+    def test_an_empty_transcript_fails_loudly_instead_of_summarizing_nothing(self):
+        empty = mock.patch.multiple(
+            pipeline,
+            get_metadata=lambda url: dict(self.METADATA),
+            fetch_transcript=lambda url, force_whisper=False: {
+                "text": "   ",
+                "source": "captions",
+            },
+        )
+        with empty, self.assertRaises(pipeline.PipelineError):
+            pipeline.summarize_video(self.URL)
+
+    def test_the_mode_survives_the_trip_through_the_issue_body(self):
+        self.assertEqual(drain.parse_issue_mode(drain.build_issue_body("", "raw")), "raw")
+        # An unmarked issue - every one queued before today - still summarizes.
+        self.assertEqual(drain.parse_issue_mode(None), "summary")
+        self.assertEqual(drain.parse_issue_mode("just a note"), "summary")
+        self.assertIsNone(drain.build_issue_body("", "summary"))
+
+    def test_the_mode_marker_is_never_mistaken_for_a_prompt(self):
+        self.assertEqual(drain.parse_issue_prompt(drain.build_issue_body("", "raw")), "")
+        both = drain.build_issue_body("Only the numbers.", "raw")
+        self.assertEqual(drain.parse_issue_mode(both), "raw")
+        self.assertEqual(drain.parse_issue_prompt(both), "Only the numbers.")
+
+    def test_an_unreadable_mode_summarizes_rather_than_dropping_the_video(self):
+        self.assertEqual(
+            drain.parse_issue_mode(drain.MODE_MARKER + " sideways"), "summary"
+        )
+
+    def test_a_transcript_is_kept_for_every_job_and_raw_ones_stay_local(self):
+        commits = []
+
+        class FakeGitHub:
+            def commit_file(self, path, content, message):
+                commits.append(path)
+
+            def comment(self, number, body):
+                self.body = body
+
+            def close_issue(self, number):
+                self.closed = number
+
+        def fake_summarize_video(url, **kwargs):
+            mode = kwargs["mode"]
+            spoken = "line one. line two."
+            return {
+                "id": "abc123",
+                "title": "A Talk",
+                "mode": mode,
+                "detail": "detailed",
+                "custom_prompt": "",
+                "transcript": spoken,
+                "transcript_source": "manual captions",
+                "transcript_text": spoken,
+                "text": spoken if mode == "raw" else "The gist.",
+                "markdown": "",
+            }
+
+        for mode, expect_commit in (("summary", True), ("raw", False)):
+            with tempfile.TemporaryDirectory() as folder:
+                issue = {
+                    "number": 7,
+                    "title": self.URL,
+                    "body": drain.build_issue_body("", mode),
+                    "labels": [],
+                }
+                with mock.patch.object(
+                    pipeline, "summarize_video", side_effect=fake_summarize_video
+                ):
+                    outcome = drain.process_issue(
+                        FakeGitHub(), issue, False, output_dir=folder
+                    )
+                transcript = Path(outcome["transcript_path"])
+                self.assertTrue(transcript.is_file(), mode)
+                self.assertEqual(transcript.parent.name, drain.TRANSCRIPT_DIR)
+                self.assertIn("line one", transcript.read_text(encoding="utf-8"))
+                # A raw job commits nothing and writes no summary file, so the
+                # repo and the summary list both stay honest.
+                self.assertEqual(bool(commits), expect_commit, mode)
+                self.assertEqual(bool(outcome["local_path"]), expect_commit, mode)
+                commits.clear()
+
+    def test_a_transcript_comment_cannot_exceed_what_github_accepts(self):
+        bounded = drain.bounded_comment("word " * 40_000)
+        self.assertLessEqual(len(bounded), 65_536)
+        self.assertIn("Truncated here", bounded)
+        self.assertEqual(drain.bounded_comment("short"), "short")  # fits, untouched
+
+
+class WebTranscriptTests(unittest.TestCase):
+    """The web page has to offer the raw option and show what it produced."""
+
+    @classmethod
+    def setUpClass(cls):
+        import dashboard
+        from fastapi.testclient import TestClient
+
+        cls.folder = Path(tempfile.mkdtemp())
+        transcripts = cls.folder / drain.TRANSCRIPT_DIR
+        transcripts.mkdir()
+        blank = chr(10) + chr(10)
+        (cls.folder / "a-talk--abc123.txt").write_text(
+            "A Talk" + blank + "The gist.", encoding="utf-8"
+        )
+        (transcripts / "a-talk--abc123.txt").write_text(
+            "A Talk" + blank + "every word of it", encoding="utf-8"
+        )
+        (transcripts / "raw-only--def456.txt").write_text(
+            "Raw Only" + blank + "unsummarized words", encoding="utf-8"
+        )
+
+        class _StubGitHub:
+            def __init__(self):
+                self.created = []
+
+            def create_issue(self, title, body=None):
+                self.created.append((title, body))
+                return {"number": len(self.created)}
+
+            def open_issues(self):
+                return []
+
+        class _StubWorker:
+            poll_seconds = 120
+
+            def __init__(self):
+                self.gh = _StubGitHub()
+
+            def snapshot(self):
+                return {
+                    "state": "idle",
+                    "last_poll": None,
+                    "last_result": "",
+                    "ok_total": 0,
+                    "failed_total": 0,
+                }
+
+            def request_drain(self):
+                pass
+
+        cls.dashboard = dashboard
+        cls.worker = _StubWorker()
+        dashboard.attach_worker(cls.worker, summary_dir=str(cls.folder))
+        cls.client = TestClient(dashboard.app)
+
+    def _queue(self, **data):
+        data.setdefault("url", "https://www.youtube.com/watch?v=abc123")
+        self.client.post("/queue", data=data, follow_redirects=False)
+        return self.worker.gh.created[-1][1]
+
+    def test_the_page_offers_both_outputs_with_summary_preselected(self):
+        page = self.client.get("/").text
+        self.assertIn('value="summary" checked', page)
+        self.assertIn('value="raw"', page)
+        self.assertIn("Transcript only", page)
+
+    def test_asking_for_a_transcript_queues_a_transcript_job(self):
+        self.assertEqual(drain.parse_issue_mode(self._queue(mode="raw")), "raw")
+
+    def test_the_default_and_a_tampered_mode_both_summarize(self):
+        self.assertEqual(drain.parse_issue_mode(self._queue()), "summary")
+        self.assertEqual(drain.parse_issue_mode(self._queue(mode="../etc")), "summary")
+
+    def test_transcripts_are_listed_and_readable(self):
+        page = self.client.get("/").text
+        self.assertIn("/t/a-talk--abc123", page)
+        self.assertIn("raw only", page.lower())  # badge on a transcript-only job
+        self.assertIn("every word of it", self.client.get("/t/a-talk--abc123").text)
+
+    def test_a_summary_links_to_the_transcript_it_was_written_from(self):
+        page = self.client.get("/s/a-talk--abc123").text
+        self.assertIn("/t/a-talk--abc123", page)
+        self.assertIn("The gist.", page)
+
+    def test_search_reaches_words_that_only_exist_in_the_transcript(self):
+        self.assertIn(
+            "/t/raw-only--def456", self.client.get("/search?q=unsummarized").text
+        )
+
+    def test_a_transcript_page_cannot_be_talked_out_of_its_folder(self):
+        for path in ("/t/..%2F..%2Fsecret", "/t/nothing-here", "/t/a.b"):
+            self.assertIn(self.client.get(path).status_code, (400, 404), path)
+
+
 if __name__ == "__main__":
     unittest.main()

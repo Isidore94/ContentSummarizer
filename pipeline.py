@@ -1,9 +1,12 @@
-"""pipeline.py — Turn a YouTube URL into a plain-text summary.
+"""pipeline.py — Turn a YouTube URL into a plain-text summary or transcript.
 
 Given a video URL the pipeline (1) fetches existing captions with yt-dlp,
 (2) falls back to a configured transcription backend when a video has no
-captions, and (3) summarizes the transcript with OpenAI or Anthropic. It returns
-finished plain text ready to save and commit.
+captions, and (3) either summarizes that transcript with OpenAI or Anthropic or
+hands it straight back, depending on the requested output mode. Either way the
+full transcript comes back with the result so the caller can keep it: it is the
+complete text every summary is built from, and once the job is over it is
+otherwise gone.
 """
 
 from __future__ import annotations
@@ -33,6 +36,18 @@ log = logging.getLogger(__name__)
 # ANTHROPIC_SUMMARY_MODEL / OPENAI_SUMMARY_MODEL.
 ANTHROPIC_SUMMARY_MODEL_DEFAULT = "claude-sonnet-5"
 OPENAI_SUMMARY_MODEL_DEFAULT = "gpt-4o"
+
+# What a queued video turns into: an AI summary, or the raw transcript with no
+# model involved. Raw mode is the honest cheap path — no API call, no
+# interpretation, just every word that was said.
+OUTPUT_MODES = ("summary", "raw")
+_MODE_ALIASES = {
+    "summary": "summary",
+    "summarize": "summary",
+    "raw": "raw",
+    "transcript": "raw",
+    "transcript-only": "raw",
+}
 
 # Local Whisper settings for the caption-less fallback path.
 WHISPER_MODEL = "large-v3"
@@ -196,10 +211,13 @@ def _download_subs(url, workdir, auto):
     return vtts[0] if vtts else None
 
 
-def fetch_captions(url):
-    """Fetch captions for a video, preferring manual subs over auto-generated.
+def fetch_captions_with_source(url):
+    """Fetch captions, preferring manual subs over auto-generated ones.
 
-    Returns plain text, or None when the video has no captions at all.
+    Returns (text, source) where source is "manual captions" or
+    "auto-generated captions", or (None, "") when the video has neither. The
+    source travels with the text because the saved transcript should say where
+    its words came from — auto captions mishear names, manual ones rarely do.
     """
     with tempfile.TemporaryDirectory() as workdir:
         path = _download_subs(url, workdir, auto=False)
@@ -208,10 +226,16 @@ def fetch_captions(url):
             path = _download_subs(url, workdir, auto=True)
             source = "auto"
         if not path:
-            return None
+            return None, ""
         log.info("using %s captions", source)
+        label = "manual captions" if source == "manual" else "auto-generated captions"
         with open(path, encoding="utf-8") as fh:
-            return strip_vtt(fh.read())
+            return strip_vtt(fh.read()), label
+
+
+def fetch_captions(url):
+    """Fetch captions for a video as plain text, or None when there are none."""
+    return fetch_captions_with_source(url)[0]
 
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -615,6 +639,17 @@ def normalize_summary_detail(value):
     return detail
 
 
+def normalize_output_mode(value):
+    """Return "summary" or "raw". An unrecognized mode is an error, not a guess."""
+    mode = (value or "summary").strip().lower()
+    resolved = _MODE_ALIASES.get(mode)
+    if resolved is None:
+        raise PipelineError(
+            f"Unknown output mode {mode!r}; expected 'summary' or 'raw'"
+        )
+    return resolved
+
+
 def normalize_custom_prompt(value):
     """Return a bounded, single-block custom instruction, or ''."""
     text = (value or "").strip()
@@ -717,48 +752,87 @@ def summarize(transcript, api_key=None, detail=None, custom_prompt=None):
     )
 
 
-def summarize_video(url, force_whisper=False, api_key=None, detail=None,
-                    custom_prompt=None):
-    """Turn a YouTube URL into finished summary markdown.
+def fetch_transcript(url, force_whisper=False):
+    """Return {"text", "source"} — every word of the video, however we got it."""
+    if not force_whisper:
+        transcript, source = fetch_captions_with_source(url)
+        if transcript:
+            return {"text": transcript, "source": source}
+        log.info("no captions found; falling back to transcription")
+    else:
+        log.info("force_whisper set; skipping captions")
+    return {"text": transcribe(url), "source": "transcribed audio"}
 
-    Returns {"title": ..., "markdown": ...}. Raises PipelineError on failure.
+
+def transcript_document(title, url, transcript, source):
+    """The saved raw log: a short header, then the transcript, unedited.
+
+    The header is there so a file found months later still says what it is, and
+    the counts are there because "did this video even have a usable transcript?"
+    is the first question anyone asks of a thin summary.
+    """
+    words = len(transcript.split())
+    return (
+        f"{title}\n"
+        f"{url}\n"
+        f"Transcript from {source} — {words:,} words, {len(transcript):,} characters\n"
+        f"\n{transcript.strip()}\n"
+    )
+
+
+def summarize_video(url, force_whisper=False, api_key=None, detail=None,
+                    custom_prompt=None, mode="summary"):
+    """Turn a YouTube URL into finished text.
+
+    ``mode`` decides what comes back as ``text``: "summary" runs the transcript
+    through the model, "raw" skips the model entirely and hands back the
+    transcript itself. Either way the result carries the transcript and a
+    ready-to-save ``transcript_text`` copy of it — the caller keeps that log
+    whichever output was asked for.
+
+    Raises PipelineError on failure.
     """
     url = validate_youtube_url(url)
+    mode = normalize_output_mode(mode)
     meta = get_metadata(url)
     title = meta["title"]
 
-    transcript = None
-    if force_whisper:
-        log.info("force_whisper set; skipping captions")
-    else:
-        transcript = fetch_captions(url)
-
-    if not transcript:
-        if not force_whisper:
-            log.info("no captions found; falling back to transcription")
-        transcript = transcribe(url)
+    fetched = fetch_transcript(url, force_whisper=force_whisper)
+    transcript = fetched["text"]
+    if not transcript.strip():
+        raise PipelineError("no transcript text could be obtained for this video")
+    log_text = transcript_document(title, url, transcript, fetched["source"])
 
     detail = normalize_summary_detail(
         detail or os.environ.get("SUMMARY_DETAIL", "detailed")
     )
     custom_prompt = normalize_custom_prompt(custom_prompt)
-    body = summarize(
-        transcript, api_key=api_key, detail=detail, custom_prompt=custom_prompt
-    )
-    if not body:
-        raise PipelineError("summarizer returned empty output")
 
-    # Record the instruction in the file so a summary always explains why it
-    # looks the way it does.
-    header = f"{title}\n{url}\n"
-    if custom_prompt:
-        header += f"Prompt: {' '.join(custom_prompt.split())}\n"
-    text = f"{header}\n{body}\n"
+    if mode == "raw":
+        text = log_text  # no API call at all; the transcript is the deliverable
+    else:
+        body = summarize(
+            transcript, api_key=api_key, detail=detail, custom_prompt=custom_prompt
+        )
+        if not body:
+            raise PipelineError("summarizer returned empty output")
+
+        # Record the instruction in the file so a summary always explains why it
+        # looks the way it does.
+        header = f"{title}\n{url}\n"
+        if custom_prompt:
+            header += f"Prompt: {' '.join(custom_prompt.split())}\n"
+        text = f"{header}\n{body}\n"
+
     return {
         "id": meta["id"],
         "title": title,
+        "mode": mode,
         "detail": detail,
         "custom_prompt": custom_prompt,
+        "transcript": transcript,
+        "transcript_source": fetched["source"],
+        "transcript_text": log_text,
         "text": text,
         # Backward-compatible key for GitHub comments and older callers.
         "markdown": text,

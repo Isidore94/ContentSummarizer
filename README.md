@@ -33,6 +33,33 @@ Repository copies are written to
 them directly to the folder selected in its GUI, including Google Drive for
 desktop folders.
 
+### Output mode: summary or raw transcript
+
+Every video is queued as one of two things, chosen per video in the desktop app
+and on the web page:
+
+- **AI summary** (the default) — the pipeline as described above.
+- **Transcript only** — step 3 is skipped entirely. No model call, no API cost,
+  no interpretation: you get every word that was said.
+
+An issue with no mode marker summarizes, so anything queued before this existed
+(or straight from the iOS Shortcut) behaves exactly as it always has.
+
+### Transcripts are kept
+
+Whichever mode a video was queued in, the full transcript is saved to
+`<summary folder>/transcripts/<same-filename>.txt` — the complete text the
+summary was built from, with a one-line header saying where the words came from
+(manual captions, auto-generated captions, or transcribed audio) and how many
+there were.
+
+These files stay on the machine that made them: raw transcripts are bulk source
+text, so they are never committed to the repo (`summaries/transcripts/` is
+gitignored). A transcript shares its summary's filename, which is what lets
+either GUI jump between the two. Transcripts of raw-mode jobs are reported back
+on the GitHub issue as a comment, truncated to the 65,536 characters GitHub
+accepts.
+
 ## Repo layout
 
 ```
@@ -45,6 +72,7 @@ requirements.txt
 README.md
 MOBILE_SHORTCUT.md  # iOS Shortcut recipe to add videos from your phone
 summaries/          # generated summaries land here
+summaries/transcripts/  # raw pre-summary text, local only (gitignored)
 ```
 
 ## Setup (Windows desktop, RTX 3080 Ti / CUDA)
@@ -196,9 +224,15 @@ In the window:
   finishes a video, the new file is announced in the status strip, chimes
   (toggle: *Chime on new summary*), and opens in the **Preview** pane — no
   clicking around to find out whether it worked.
-- **Preview** reads the summary in-app; *Open in editor*, *Copy text*, and
-  *Show newest* sit under it. Double-click a row to open the `.txt`.
-- **Find** filters the saved summaries by any words in the title.
+- **Preview** reads the summary in-app; *Open in editor*, *Copy text*,
+  *Show newest*, and *View transcript* sit under it. Double-click a row to open
+  the `.txt`.
+- **Show: Summaries / Transcripts** switches the list between the two folders.
+  *View transcript* / *View summary* jumps between the two halves of whatever is
+  selected.
+- **Output: AI summary / Transcript only** picks what the next queued video
+  becomes. It resets to *AI summary* after each video is queued.
+- **Find** filters the saved files by any words in the title.
 - The header shows a coloured listening dot, done/failed counts, and a
   progress bar while a video is actually being processed.
 - **Queue** and **Activity** share a tabbed pane. Failed queue rows are red.
@@ -249,9 +283,11 @@ any always-on box (e.g. a mini PC) — no GPU needed:
 
 - **Worker**: polls the queue every `POLL_INTERVAL_SECONDS` (default 120) and
   summarizes videos as they arrive.
-- **Dashboard**: a LAN web UI on port 8787 — queue view, paste-a-URL box,
-  *Drain now*, per-video *Retry*, browsable/searchable summaries, and a
-  per-browser auto-refresh (Off / 15s / 30s / 60s) so a page left open keeps up.
+- **Dashboard**: a LAN web UI on port 8787 — queue view, paste-a-URL box with
+  an *AI summary / Transcript only* choice, *Drain now*, per-video *Retry*,
+  browsable summaries and transcripts (search covers both, so a half-remembered
+  phrase finds its video even when no summary quotes it), and a per-browser
+  auto-refresh (Off / 15s / 30s / 60s) so a page left open keeps up.
 - **Transcription without a GPU**: with `TRANSCRIBE_BACKEND=auto` (the
   default), caption-less videos use the desktop's GPU node (`gpu_node.py`,
   below) whenever that PC is on, else the OpenAI audio API. `openai`, `local`

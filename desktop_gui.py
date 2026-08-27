@@ -169,6 +169,10 @@ class ContentSummarizerApp:
         self.lan_started = False
 
         self.folder_var = tk.StringVar(value=str(self.settings["summary_folder"]))
+        # Which folder the list below is showing: the summaries, or the raw
+        # transcripts kept beside them.
+        self.view_var = tk.StringVar(value="summaries")
+        self.mode_var = tk.StringVar(value="summary")
         self.detail_var = tk.StringVar(value=str(self.settings["summary_detail"]))
         self.auto_start_var = tk.BooleanVar(value=bool(self.settings["auto_start"]))
         self.notify_sound_var = tk.BooleanVar(value=bool(self.settings["notify_sound"]))
@@ -303,11 +307,29 @@ class ContentSummarizerApp:
             row=0, column=2, padx=(6, 0)
         )
 
+        ttk.Label(add_box, text="Output").grid(
+            row=1, column=0, sticky="w", padx=(0, 10), pady=(8, 0)
+        )
+        mode_frame = ttk.Frame(add_box)
+        mode_frame.grid(row=1, column=1, columnspan=2, sticky="w", pady=(8, 0))
+        for value, label in (("summary", "AI summary"), ("raw", "Transcript only")):
+            ttk.Radiobutton(
+                mode_frame,
+                text=label,
+                value=value,
+                variable=self.mode_var,
+            ).pack(side="left", padx=(0, 16))
+        ttk.Label(
+            mode_frame,
+            text="Transcript only skips the AI: no summary, no API cost.",
+            foreground="#5a5a5a",
+        ).pack(side="left")
+
         ttk.Label(add_box, text="AI prompt").grid(
-            row=1, column=0, sticky="nw", padx=(0, 10), pady=(8, 0)
+            row=2, column=0, sticky="nw", padx=(0, 10), pady=(8, 0)
         )
         self.prompt_text = tk.Text(add_box, height=2, wrap="word", font=("Segoe UI", 9))
-        self.prompt_text.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(8, 0))
+        self.prompt_text.grid(row=2, column=1, columnspan=2, sticky="ew", pady=(8, 0))
         self.prompt_text.bind("<Control-Return>", lambda _e: (self.queue_video(), "break")[1])
         ttk.Label(
             add_box,
@@ -319,7 +341,7 @@ class ContentSummarizerApp:
             wraplength=900,
             justify="left",
             foreground="#5a5a5a",
-        ).grid(row=2, column=1, columnspan=2, sticky="w", pady=(4, 0))
+        ).grid(row=3, column=1, columnspan=2, sticky="w", pady=(4, 0))
 
         controls = ttk.Frame(outer)
         controls.grid(row=3, column=0, sticky="ew", pady=(0, 12))
@@ -410,15 +432,32 @@ class ContentSummarizerApp:
         log_scroll.grid(row=0, column=1, sticky="ns")
         self.log_text.configure(yscrollcommand=log_scroll.set)
 
-        summary_box = ttk.LabelFrame(right, text="Saved summaries", padding=8)
+        self.summary_box = ttk.LabelFrame(right, text="Saved summaries", padding=8)
+        summary_box = self.summary_box
         preview_box = ttk.LabelFrame(right, text="Preview", padding=8)
         summary_box.grid(row=0, column=0, sticky="nsew")
         preview_box.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
 
-        summary_box.rowconfigure(1, weight=1)
+        summary_box.rowconfigure(2, weight=1)
         summary_box.columnconfigure(0, weight=1)
+
+        view_row = ttk.Frame(summary_box)
+        view_row.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ttk.Label(view_row, text="Show").pack(side="left", padx=(0, 8))
+        for value, label in (
+            ("summaries", "Summaries"),
+            ("transcripts", "Transcripts"),
+        ):
+            ttk.Radiobutton(
+                view_row,
+                text=label,
+                value=value,
+                variable=self.view_var,
+                command=self.change_view,
+            ).pack(side="left", padx=(0, 12))
+
         filter_row = ttk.Frame(summary_box)
-        filter_row.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        filter_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         filter_row.columnconfigure(1, weight=1)
         ttk.Label(filter_row, text="Find").grid(row=0, column=0, padx=(0, 6))
         filter_entry = ttk.Entry(filter_row, textvariable=self.filter_var)
@@ -436,11 +475,11 @@ class ContentSummarizerApp:
         self.summary_tree.column("name", width=280)
         self.summary_tree.column("when", width=90, anchor="e", stretch=False)
         self.summary_tree.tag_configure("fresh", foreground="#1f7a37")
-        self.summary_tree.grid(row=1, column=0, sticky="nsew")
+        self.summary_tree.grid(row=2, column=0, sticky="nsew")
         summary_scroll = ttk.Scrollbar(
             summary_box, orient="vertical", command=self.summary_tree.yview
         )
-        summary_scroll.grid(row=1, column=1, sticky="ns")
+        summary_scroll.grid(row=2, column=1, sticky="ns")
         self.summary_tree.configure(yscrollcommand=summary_scroll.set)
         self.summary_tree.bind("<<TreeviewSelect>>", self._on_summary_selected)
         self.summary_tree.bind("<Double-1>", self.open_selected_summary)
@@ -476,6 +515,14 @@ class ContentSummarizerApp:
         ttk.Button(
             preview_buttons, text="Show newest", command=self.show_newest_summary
         ).pack(side="left", padx=(8, 0))
+        # A summary and its transcript share a filename, so "the other half of
+        # this document" is always one click away.
+        self.pair_button = ttk.Button(
+            preview_buttons,
+            text="View transcript",
+            command=self.show_paired_file,
+        )
+        self.pair_button.pack(side="left", padx=(8, 0))
         self._set_preview("Select a summary on the left to read it here.")
 
         status_bar = ttk.Frame(outer)
@@ -674,12 +721,13 @@ class ContentSummarizerApp:
         prompt = pipeline.normalize_custom_prompt(
             self.prompt_text.get("1.0", "end").strip()
         )
+        mode = pipeline.normalize_output_mode(self.mode_var.get())
         self._flash("Queueing…")
 
         def create():
             try:
                 issue = self.worker.gh.create_issue(
-                    url, body=drain.build_issue_body(prompt)
+                    url, body=drain.build_issue_body(prompt, mode)
                 )
             except Exception as exc:
                 if not self.closing:
@@ -692,8 +740,9 @@ class ContentSummarizerApp:
                 log.exception("could not queue %s", url)
                 return
             log.info(
-                "queued #%s: %s%s",
+                "queued #%s [%s]: %s%s",
                 issue["number"],
+                mode,
                 url,
                 " (custom prompt)" if prompt else "",
             )
@@ -706,12 +755,15 @@ class ContentSummarizerApp:
         threading.Thread(target=create, daemon=True, name="queue-video").start()
 
     def _clear_add_form(self, issue_number=None):
+        was_raw = self.mode_var.get() == "raw"
         self.url_var.set("")
         self.prompt_text.delete("1.0", "end")
+        self.mode_var.set("summary")  # the next video is a summary unless asked otherwise
         self.listen_button.configure(text="Pause listening")
         if issue_number is not None:
+            what = "transcript" if was_raw else "summary"
             self._flash(
-                f"Queued as #{issue_number}. The summary appears on the right when it is done.",
+                f"Queued as #{issue_number}. The {what} appears on the right when it is done.",
                 "good",
             )
         self.refresh_queue()
@@ -792,6 +844,17 @@ class ContentSummarizerApp:
             return
         for source in old.glob("*.txt"):
             target = new / source.name
+            if not target.exists():
+                shutil.copy2(source, target)
+        # The transcripts belong to the summaries; leaving them behind would
+        # quietly break every "view the transcript" jump.
+        old_transcripts = drain.transcript_dir(old)
+        if not old_transcripts.is_dir():
+            return
+        new_transcripts = drain.transcript_dir(new)
+        new_transcripts.mkdir(parents=True, exist_ok=True)
+        for source in old_transcripts.glob("*.txt"):
+            target = new_transcripts / source.name
             if not target.exists():
                 shutil.copy2(source, target)
 
@@ -876,9 +939,75 @@ class ContentSummarizerApp:
 
     # ------------------------------------------------------------- summaries
 
+    def _summary_folder(self) -> Path:
+        return Path(self.folder_var.get()).expanduser()
+
+    def _transcript_folder(self) -> Path:
+        return drain.transcript_dir(self._summary_folder())
+
+    def _showing_transcripts(self) -> bool:
+        return self.view_var.get() == "transcripts"
+
+    def _active_folder(self) -> Path:
+        """The folder the list is showing — summaries, or the transcripts beside them."""
+        return (
+            self._transcript_folder()
+            if self._showing_transcripts()
+            else self._summary_folder()
+        )
+
+    def change_view(self):
+        """Switch the list between summaries and transcripts."""
+        transcripts = self._showing_transcripts()
+        self.summary_box.configure(
+            text="Saved transcripts" if transcripts else "Saved summaries"
+        )
+        self.summary_tree.heading(
+            "name", text="Transcript" if transcripts else "Summary"
+        )
+        self.pair_button.configure(
+            text="View summary" if transcripts else "View transcript"
+        )
+        # A different folder is not a batch of new files; re-baseline so the
+        # switch itself never chimes.
+        self.known_summaries = None
+        self.last_summary_names = []
+        self._refresh_summaries(schedule_next=False)
+        if not self.summary_tree.get_children():
+            self._set_preview(
+                "No transcripts saved yet. Every video processed from now on keeps "
+                "the full text it was summarized from, right here."
+                if transcripts
+                else "No summaries yet."
+            )
+
+    def show_paired_file(self):
+        """Jump between a summary and the transcript it was written from."""
+        path = self._selected_summary_path()
+        if path is None:
+            self._flash("Select something on the left first.", "bad")
+            return
+        name = path.name
+        going_to_transcripts = not self._showing_transcripts()
+        target_dir = (
+            self._transcript_folder() if going_to_transcripts else self._summary_folder()
+        )
+        if not (target_dir / name).is_file():
+            self._flash(
+                f"No saved {'transcript' if going_to_transcripts else 'summary'} for "
+                f"{_pretty_title(name)}.",
+                "bad",
+            )
+            return
+        self.view_var.set("transcripts" if going_to_transcripts else "summaries")
+        self.change_view()
+        self.filter_var.set("")
+        self._render_summary_list()
+        self._select_summary_by_name(name, preview=True)
+
     def _refresh_summaries(self, schedule_next=True):
-        """Poll the summary folder; announce anything the worker just wrote."""
-        folder = Path(self.folder_var.get()).expanduser()
+        """Poll the active folder; announce anything the worker just wrote."""
+        folder = self._active_folder()
         try:
             paths = sorted(
                 folder.glob("*.txt"), key=lambda p: p.stat().st_mtime, reverse=True
@@ -907,13 +1036,14 @@ class ContentSummarizerApp:
 
     def _announce_new_summaries(self, fresh: list[str]):
         newest = fresh[0]
+        kind = "Transcript" if self._showing_transcripts() else "Summary"
         if len(fresh) == 1:
-            message = f"✨ Summary ready: {_pretty_title(newest)}"
+            message = f"✨ {kind} ready: {_pretty_title(newest)}"
         else:
             message = (
-                f"✨ {len(fresh)} new summaries — newest: {_pretty_title(newest)}"
+                f"✨ {len(fresh)} new {kind.lower()}s — newest: {_pretty_title(newest)}"
             )
-        log.info("new summary file(s): %s", ", ".join(fresh))
+        log.info("new %s file(s): %s", kind.lower(), ", ".join(fresh))
         self._flash(message, "good")
         self._chime()
         self.filter_var.set("")  # never hide the thing we just announced
@@ -940,7 +1070,9 @@ class ContentSummarizerApp:
         self.summary_paths = paths
         total = len(self.all_summary_paths)
         if not total:
-            self.summary_count_var.set("No summaries yet")
+            self.summary_count_var.set(
+                "No transcripts yet" if self._showing_transcripts() else "No summaries yet"
+            )
         elif len(paths) == total:
             self.summary_count_var.set(f"{total} saved")
         else:
@@ -1013,7 +1145,10 @@ class ContentSummarizerApp:
 
     def show_newest_summary(self):
         if not self.all_summary_paths:
-            self._flash("No summaries yet.", "bad")
+            self._flash(
+                "No transcripts yet." if self._showing_transcripts() else "No summaries yet.",
+                "bad",
+            )
             return
         self.filter_var.set("")
         self._render_summary_list()
@@ -1131,6 +1266,10 @@ def _smoke_test_lan_server():
         raise RuntimeError("the web page is missing the AI prompt box")
     if "Auto-refresh:" not in body:
         raise RuntimeError("the web page is missing the auto-refresh control")
+    if 'name="mode"' not in body:
+        raise RuntimeError("the web page is missing the summary/transcript choice")
+    if "Transcripts" not in body:
+        raise RuntimeError("the web page is missing the transcript list")
 
 
 def main():

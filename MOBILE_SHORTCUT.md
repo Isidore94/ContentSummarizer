@@ -52,6 +52,22 @@ blank for normal)"*) action before **Get Contents of URL** and use its result as
 `body`. A blank answer gives the normal summary. The same box exists in the
 desktop window and the web GUI.
 
+### Optional: the transcript instead of a summary
+
+Put this marker line in the `body` to skip the AI entirely and get the raw
+transcript — every word, no model, no API cost:
+
+```json
+{
+  "title": "https://www.youtube.com/watch?v=VIDEO_ID",
+  "body": "<!-- content-summarizer:mode --> raw"
+}
+```
+
+The transcript comes back as a comment on the issue (truncated if the video is
+long) and is saved in full on the machine that ran the job. A body without the
+marker summarizes as usual, so nothing about the Shortcut above needs to change.
+
 > **Token:** use the same fine-grained PAT as the drainer (scoped to this repo,
 > **Issues: Read and write**). Creating issues only needs the Issues write
 > permission. Keep the token in the Shortcut only — don't share the Shortcut
