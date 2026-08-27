@@ -71,6 +71,8 @@ requirements.txt
 .gitignore
 README.md
 MOBILE_SHORTCUT.md  # iOS Shortcut recipe to add videos from your phone
+CLAUDE.md           # AI context index (AGENTS.md is a copy — edit CLAUDE.md, re-copy)
+docs/decisions/     # why the queue, library, and deployment choices are what they are
 summaries/          # generated summaries land here
 summaries/transcripts/  # raw pre-summary text, local only (gitignored)
 ```
