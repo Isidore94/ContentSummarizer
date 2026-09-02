@@ -1,0 +1,33 @@
+9 EVE Online Tricks Veterans Use (But DON'T Explain) 🚀
+https://youtube.com/watch?v=jSJXYe4zcrM&si=eMWoDuvvQPdpCxXe
+
+CORE IDEA
+The video provides strategies for optimizing gameplay in Eve Online, focusing on building a network of bases near high-content areas (bulwark systems), understanding ship roles, and managing resources like ISK and assets efficiently. The speaker emphasizes the importance of being strategically close to both market hubs and action zones to maximize content access while minimizing unnecessary travel. The discussed strategies aim to enhance gameplay experience, improve resource collection efficiency, and ensure preparedness for a variety of in-game activities.
+
+ARGUMENTS & LESSONS
+- Establish a network of multiple bases in Eve Online to ensure proximity to both markets and content zones. This setup allows players to access a variety of activities without extensive travel, optimizing both time and resource benefits.
+- Prioritize setting up bases close to "content" areas, especially bulwark systems, which guarantee access to NPC missions, mining, hacking, and theaters of war. This approach places players at the center of diverse activities, enhancing engagement.
+- "Content" refers not only to single missions or activities but encompasses all forms of in-game engagements including mining, missions, and theaters of war. This comprehensive approach ensures players are never idle or missing out on opportunities.
+- Use local chat and watch lists for monitoring player activities and potential threats. Right-clicking on player names allows players to note past interactions such as ganking attempts and mark these players or their corporations as red, providing a visual alert system.
+- Align time is crucial for escape and efficiency in Eve Online. A shorter align time (e.g., sub4 seconds) allows quicker escape from threats. Certain ship fittings enhance align time, including inertia stabilizers in low slots and polycarbon engine housing in rig slots.
+- Utilize an updated overview by copying experienced players' overview settings to quickly assess various in-game aspects, such as travel paths, PvP engagement potential, and loot availability, allowing for efficient decision-making during gameplay.
+- Ship roles are determined largely by bonuses provided by the ship's specifications. Analyzing these bonuses helps players choose suitable roles (e.g., damage dealer, support) and appropriate missions or activities for each ship, optimizing its effectiveness.
+- Employ dedicated hauling ships to transport valuables, keeping combat and cargo-hauling activities separate. This minimizes the risk of loss from ganking during transportation, particularly when traveling through high-traffic or high-risk areas.
+- Cap stability in ships should be matched to the activity. Ships do not always need to be cap stable; rather, players should understand their ship’s capacitor limits in relation to the planned activities and adjust fittings to balance between durability and firepower.
+- The "agency" tab, along with the "opportunity" tab and "theaters of war", are essential tools for identifying and engaging in diverse in-game activities. These tools help players ensure a constant stream of engagements and foster extensive exploration of content.
+- Players should separate hauling from combat completely to optimize efficiency and minimize risks. Using T2 hauling ships or travel interceptors for transporting goods prevents unnecessary risks when moving items.
+
+MENTAL MODELS & DEFINITIONS
+- BULWARK SYSTEMS: Newly recognized high-security systems forming a network of content zones rich in activities like combat, mining, and hacking due to their strategic importance in theaters of war.
+- SUB ALIGN TIME: Refers to a ship's align time being less than a specific number, such as four seconds (sub4), which denotes faster transition into warp, crucial for evading enemy locks.
+- POLYCARBON ENGINE HOUSING: A rig module used to improve a ship's align time and grid speed, thus enhancing its mobility and evasive capabilities.
+
+EVIDENCE & NUMBERS
+- Align time under 4 seconds is crucial for handling potential threats, as it allows players a second of leeway against ships with a lock time of 5 seconds.
+- The speaker's Jaguar ship achieves a natural sub4 align time without additional mods, demonstrating that certain ships inherently offer better mobility for specific roles like PvP.
+- Specific corp names such as Black Flag and CODE are identified as high-sec gank threats, suggesting players should mark them as red to avoid being caught off guard in high-security space.
+
+COUNTERPOINTS & LIMITS
+- Assigning focus on align time and ship roles based on general mechanics; assumes players have access and knowledge to obtain specific modules needed to optimize align time and functionality.
+- Relies heavily on the idea that players can and will establish multiple bases, which may not be feasible for new or resource-limited players, presenting a potential challenge in adopting these strategies.
+- The practice of marking hostile corporations or players as red in chat relies on players being active in engaging with these systems, which could be less effective if neglected.
