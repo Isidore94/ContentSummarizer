@@ -1,0 +1,25 @@
+Bank of Canada's Inflation Warning
+https://youtube.com/watch?v=8rfngngK2WY&si=hoZ7l2uENRusqAqQ
+
+CORE IDEA
+The Bank of Canada is concerned about rising inflation, which may prompt interest rate hikes if current global uncertainties such as the Middle East conflict persist and the economic relationship with the United States continues to affect inflation through trade dynamics. The bank's ability to control inflation while maintaining economic stability hinges on resolving these external pressures.
+
+ARGUMENTS & LESSONS
+- Inflation Concerns: The Bank of Canada is increasingly worried about inflation, primarily due to external factors such as the ongoing Middle East conflict and trade tensions with the United States, which could lead to increased tariffs and inflationary pressures.
+- Interest Rate Implications: While the Bank maintained the interest rate at 2.25%, traders perceive the announcement as signaling potential future rate hikes, driving up bond yields, which in turn increase fixed mortgage rates.
+- Bond Yields and Economic Impact: Rising global bond yields are tightening financial conditions, which may reduce the need for the central bank to raise interest rates aggressively since borrowing costs are already increasing.
+- Money Supply Growth: The M2 measure of Canada's money supply is now over 6%, exerting upward pressure on inflation. Expert testimony in Parliament has suggested that over 6% growth in M2 can fuel inflation above the desired 2%.
+- Economic Relationship with the U.S.: Past removal and potential reintroduction of counter tariffs with the U.S. have significant implications for inflationary pressures and monetary policy decisions in Canada.
+
+MENTAL MODELS & DEFINITIONS
+- M2 Money Supply: A broad measure of a country's money supply that includes cash, checking deposits, and easily convertible near money, used as an indicator of inflationary pressure.
+
+EVIDENCE & NUMBERS
+- Fixed Mortgage Rates: Bond yields, affecting fixed mortgage rates, have risen to their highest since July 2024 right after the central bank's announcement, indicating market expectations of future rate hikes.
+- M2 Growth: Canada's M2 growth now exceeds 6%, after being dormant, which may lead to inflation rates above 2% based on historical correlations.
+- Bond Yield Increase: Yields on the 5-year Government of Canada bond have risen by 80 basis points since the beginning of the Middle East conflict, indicating tightening financial conditions.
+
+COUNTERPOINTS & LIMITS
+- Assumes that current global conflicts and U.S.-Canada trade tensions will persist and not resolve in the near term.
+- The Bank's inflation control measures are limited by external geopolitical events, which they cannot directly influence.
+- The economic downturn could offset inflationary pressures from rising oil prices, yet this remains uncertain and dependent on various global factors.
