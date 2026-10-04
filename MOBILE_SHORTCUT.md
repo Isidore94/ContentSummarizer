@@ -76,6 +76,22 @@ unknown level is ignored (logged), not an error.
 A `detail:` line also forces a fresh summary even if that video was already
 summarized (otherwise an existing summary is reused).
 
+### Optional: the transcript instead of a summary
+
+Put this marker line in the `body` to skip the AI entirely and get the raw
+transcript — every word, no model, no API cost:
+
+```json
+{
+  "title": "https://www.youtube.com/watch?v=VIDEO_ID",
+  "body": "<!-- content-summarizer:mode --> raw"
+}
+```
+
+The transcript comes back as a comment on the issue (truncated if the video is
+long) and is saved in full on the machine that ran the job. A body without the
+marker summarizes as usual, so nothing about the Shortcut above needs to change.
+
 > **Token:** create a **separate** fine-grained PAT for the phone, scoped to
 > this repo with only **Issues: Read and write**. The drainer's token also has
 > Contents write (it commits summaries); a phone is the device most likely to

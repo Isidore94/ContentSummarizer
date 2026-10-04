@@ -4,7 +4,9 @@ The recommended setup is now the Windows GUI executable. Build it with
 `build_exe.ps1`, then follow **[EXE_SETUP.md](EXE_SETUP.md)**. The app listens to
 the same GitHub Issues queue, saves `.txt` summaries in a folder selected from
 the GUI (including Google Drive for desktop folders), and supports Simple,
-Detailed, and Complex summaries.
+Detailed, and Complex summaries — or no summary at all, if you queue a video as
+a transcript-only job. Either way the full transcript is kept in a
+`transcripts` subfolder of that same folder, readable from both GUIs.
 
 The source-based worker/dashboard instructions below remain available as a
 legacy/headless alternative.

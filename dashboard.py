@@ -1,8 +1,9 @@
 """dashboard.py — LAN web dashboard + always-on worker (mini-PC mode).
 
 Runs the polling worker (worker.py) in a background thread and serves a small
-web UI on the local network: see the queue, paste a URL to queue a video,
-drain now, retry failures, and browse/search summaries.
+web UI on the local network: see the queue, paste a URL to queue a video as a
+summary or as a plain transcript, drain now, retry failures, and browse/search
+both the summaries and the raw transcripts they were built from.
 
 Start with `python dashboard.py`. Configure with DASHBOARD_HOST /
 DASHBOARD_PORT in .env (defaults 0.0.0.0:8787). Logs go to worker.log next to
@@ -24,7 +25,7 @@ from logging.handlers import RotatingFileHandler
 
 import markdown as md
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form
+from fastapi import Cookie, FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 import drain
@@ -58,7 +59,40 @@ NO_WORKER = os.environ.get("DASHBOARD_NO_WORKER", "").strip().lower() in {
 # `git pull` brings them to disk. (No-op when there's nothing to fetch.)
 SUMMARY_PULL_SECONDS = int(os.environ.get("SUMMARY_PULL_SECONDS") or 60)
 
+# Auto-refresh: how often the home page may reload itself, in seconds (0 = never).
+# Per-device rather than a server setting, because the phone left open on the counter
+# and the PC someone is typing into want different answers.
+REFRESH_CHOICES = (0, 15, 30, 60)
+REFRESH_COOKIE = "cs_refresh"
+REFRESH_COOKIE_MAX_AGE = 400 * 24 * 3600  # remember the choice for well over a year
+
 worker: Worker | None = None
+
+
+# The GPU badge is decoration, but probing a switched-off GPU PC costs a real timeout
+# (~3s here, measured), and every home() render paid it. Auto-refresh would charge that
+# every few seconds, making the page feel broken. Cached for display only — the routing
+# decision in pipeline.transcribe() still probes live, because sending a job to a node
+# that died 20 seconds ago is a different kind of wrong.
+GPU_STATUS_TTL = 30
+_gpu_status = {"checked_at": 0.0, "online": False}
+
+
+def _gpu_online_cached():
+    now = time.time()
+    if now - _gpu_status["checked_at"] > GPU_STATUS_TTL:
+        _gpu_status["online"] = pipeline.gpu_node_online()
+        _gpu_status["checked_at"] = now
+    return _gpu_status["online"]
+
+
+def _refresh_seconds(raw):
+    """The refresh interval a request asked for, or 0 for off. Never trusts the value."""
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return 0
+    return value if value in REFRESH_CHOICES else 0
 
 
 def attach_worker(existing: Worker, summary_dir=None):
@@ -112,64 +146,258 @@ app = FastAPI(lifespan=lifespan)
 
 
 _CSS = """
-:root { color-scheme: light dark; }
+/* One set of tokens, themed once. Every colour below is a variable so the dark
+   theme is a single block at the bottom rather than a second stylesheet. */
+:root {
+  color-scheme: light dark;
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --line: #e2e5ea;
+  --ink: #14171c;
+  --ink-soft: #565d6b;
+  --ink-faint: #858d9b;
+  --brand: #2f6fed;
+  --brand-ink: #ffffff;
+  --brand-soft: #e8f0fe;
+  --ok: #0f7a52;
+  --ok-soft: #e0f4ec;
+  --err: #c0362b;
+  --err-soft: #fceceb;
+  --radius: 14px;
+  --shadow: 0 1px 2px rgba(18, 22, 32, .04), 0 8px 24px rgba(18, 22, 32, .05);
+}
 * { box-sizing: border-box; }
-body { font: 15px/1.55 system-ui, "Segoe UI", sans-serif; max-width: 840px;
-       margin: 0 auto; padding: 24px 16px; background: #f7f7f8; color: #1a1a1a; }
-h1 { font-size: 22px; margin: 0 0 4px; }
+body {
+  /* Segoe UI Variable is Windows 11's text face and is noticeably better fitted
+     than plain Segoe UI at body sizes; -apple-system takes over on the phone. */
+  font-family: "Segoe UI Variable Text", -apple-system, BlinkMacSystemFont,
+               "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 36px 20px 72px;
+  background: var(--bg);
+  color: var(--ink);
+  overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+h1 { font-size: 27px; line-height: 1.25; letter-spacing: -.021em; font-weight: 640;
+     margin: 0 0 28px; }
 h1 a { color: inherit; text-decoration: none; }
-h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .04em;
-     color: #666; margin: 22px 0 8px; }
-.card { background: #fff; border: 1px solid #e3e3e6; border-radius: 10px;
-        padding: 14px 18px; margin: 10px 0; }
-.muted { color: #777; font-size: 13px; }
-input[type=text], textarea { width: 100%; max-width: 520px; padding: 8px 10px;
-        border: 1px solid #ccc; border-radius: 8px; background: inherit; color: inherit; }
-textarea { font: inherit; resize: vertical; min-height: 62px; margin-top: 8px; }
-.field-hint { margin: 6px 0 10px; }
-button { padding: 7px 14px; border: 0; border-radius: 8px; background: #2563eb;
-         color: #fff; cursor: pointer; font-size: 14px; }
-button:hover { background: #1d4ed8; }
-form.inline { display: inline; margin-left: 6px; }
-form.inline button { padding: 2px 10px; font-size: 12px; background: #64748b; }
-.badge { border-radius: 6px; padding: 1px 8px; font-size: 12px; margin-left: 6px; }
-.badge.fail { background: #dc2626; color: #fff; }
-.badge.on { background: #16a34a; color: #fff; }
-.badge.off { background: #6b7280; color: #fff; }
-.seg { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-.seg form { display: inline; }
-.seg button { background: #64748b; padding: 4px 12px; font-size: 13px; }
-.seg button.active { background: #2563eb; }
-ul { padding-left: 20px; margin: 6px 0; }
-li { margin: 7px 0; }
-a { color: #2563eb; text-decoration: none; }
+/* Section labels: small and quiet, but with room above so each block reads as
+   its own thing instead of running into the card before it. */
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .085em;
+     font-weight: 660; color: var(--ink-faint); margin: 36px 0 12px; }
+a { color: var(--brand); text-decoration: none; }
 a:hover { text-decoration: underline; }
-.prose { background: #fff; border: 1px solid #e3e3e6; border-radius: 10px;
-         padding: 20px 26px; }
-.prose h1 { font-size: 20px; }
-.status-line { display: flex; gap: 18px; flex-wrap: wrap; }
+.muted { color: var(--ink-faint); font-size: 13.5px; }
+
+.card { background: var(--surface); border: 1px solid var(--line);
+        border-radius: var(--radius); padding: 22px 24px; box-shadow: var(--shadow); }
+.card-divider { border: 0; border-top: 1px solid var(--line); margin: 20px -24px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+
+/* Status: a label above its value, in columns that wrap. The old single line ran
+   four labelled values together and read as one long sentence. */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+         gap: 18px 26px; }
+.stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+              font-weight: 660; color: var(--ink-faint); }
+.stat-value { font-size: 15px; line-height: 1.45; font-variant-numeric: tabular-nums;
+              overflow-wrap: anywhere; }
+
+button, .btn {
+  font: inherit; font-size: 14px; font-weight: 550; line-height: 1;
+  min-height: 40px; padding: 0 16px; border: 1px solid transparent; border-radius: 10px;
+  background: var(--brand); color: var(--brand-ink); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  text-decoration: none; transition: filter .15s ease, background .15s ease;
+}
+button:hover, .btn:hover { filter: brightness(1.07); text-decoration: none; }
+button:active, .btn:active { filter: brightness(.95); }
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.btn-quiet { background: var(--surface-2); color: var(--ink-soft); border-color: var(--line); }
+
+input[type=text], input[type=search], textarea {
+  width: 100%; font: inherit; font-size: 15px; padding: 11px 14px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface); color: var(--ink);
+}
+input[type=text]:focus, input[type=search]:focus, textarea:focus {
+  outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft);
+}
+::placeholder { color: var(--ink-faint); }
+textarea { resize: vertical; min-height: 84px; margin-top: 10px; line-height: 1.55; }
+.field-hint { margin: 10px 0 16px; }
+.searchbar { display: flex; gap: 10px; align-items: center; }
+.searchbar input { flex: 1; min-width: 0; }
+
+form.inline { display: inline-flex; margin: 0; }
+form.inline button, .btn-sm { min-height: 30px; padding: 0 11px; font-size: 12.5px;
+  background: var(--surface-2); color: var(--ink-soft); border-color: var(--line); }
+
+.badge { font-size: 11px; font-weight: 660; text-transform: uppercase;
+         letter-spacing: .04em; padding: 3px 9px; border-radius: 999px; line-height: 1.5; }
+.badge.fail { background: var(--err-soft); color: var(--err); }
+.badge.on { background: var(--ok-soft); color: var(--ok); }
+.badge.off { background: var(--surface-2); color: var(--ink-faint); }
+.badge.raw { background: var(--surface-2); color: var(--ink-soft); }
+
+.seg { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.seg form { display: inline-flex; }
+.seg button { min-height: 34px; padding: 0 13px; font-size: 13px;
+              background: var(--surface-2); color: var(--ink-soft); border-color: var(--line); }
+.seg button.active { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
+.seg .btn { min-height: 34px; font-size: 13px; }
+
+/* The output choice is a radio group, not a set of submit buttons: it changes
+   what the form will do, so it must not act until the form is submitted. */
+.choice { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0 0; }
+.choice label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+  min-height: 40px; padding: 0 15px; font-size: 14px; font-weight: 550;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface-2); color: var(--ink-soft); }
+.choice label:has(input:checked) { background: var(--brand-soft);
+  border-color: var(--brand); color: var(--ink); }
+.choice input { accent-color: var(--brand); margin: 0; }
+
+/* Rows, not bullets: a title on the left and its date on the right, separated by
+   hairlines. Bulleted lines of "title date title date" were the worst of the clutter. */
+.list { list-style: none; padding: 0; margin: 0; }
+.list li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+           padding: 13px 0; border-top: 1px solid var(--line); margin: 0; }
+.list li:first-child { border-top: 0; padding-top: 2px; }
+.list li:last-child { padding-bottom: 2px; }
+/* Queue entries are raw YouTube URLs: one unbreakable token long enough to push the
+   whole page wider than a phone, which then clips every row on the right. min-width:0
+   lets the flex item shrink; anywhere lets the URL itself break. */
+.list a { font-weight: 550; min-width: 0; overflow-wrap: anywhere; }
+.list .when { margin-left: auto; font-size: 13px; color: var(--ink-faint);
+              font-variant-numeric: tabular-nums; white-space: nowrap; }
+.list .snippet { flex-basis: 100%; margin: 2px 0 0; font-size: 13.5px;
+                 color: var(--ink-faint); }
+.empty { color: var(--ink-faint); margin: 2px 0; }
+
+.prose { background: var(--surface); border: 1px solid var(--line);
+         border-radius: var(--radius); padding: 30px 34px; box-shadow: var(--shadow); }
+.prose h1 { font-size: 22px; margin-bottom: 18px; }
+/* A summary is prose, not code: reading it in the body face at a generous measure
+   beats the monospace block it used to be. */
+.prose pre { font: inherit; line-height: 1.72; white-space: pre-wrap;
+             overflow-wrap: anywhere; margin: 0; }
+.backlink { margin: 0 0 18px; font-size: 14px; }
+
+@media (max-width: 560px) {
+  body { padding: 22px 15px 56px; font-size: 15.5px; }
+  h1 { font-size: 23px; margin-bottom: 22px; }
+  h2 { margin-top: 28px; }
+  .card { padding: 17px 18px; border-radius: 12px; }
+  .card-divider { margin: 17px -18px; }
+  .prose { padding: 22px 20px; }
+}
+
 @media (prefers-color-scheme: dark) {
-  body { background: #121214; color: #e6e6e9; }
-  .card, .prose { background: #1c1c1f; border-color: #333338; }
-  h2 { color: #9a9aa3; }
-  .muted { color: #94949c; }
-  input[type=text], textarea { border-color: #44444a; }
-  a { color: #7aa2ff; }
+  :root {
+    --bg: #0e1014;
+    --surface: #171a20;
+    --surface-2: #232833;
+    --line: #2b313c;
+    --ink: #e7e9ee;
+    --ink-soft: #a7aebc;
+    --ink-faint: #7e8695;
+    --brand: #5b8cff;
+    --brand-ink: #0a0f1c;
+    --brand-soft: #1a2337;
+    --ok: #3fcb92;
+    --ok-soft: #12291f;
+    --err: #ff7a6d;
+    --err-soft: #2c1715;
+    --shadow: none;
+  }
 }
 """
 
 
-def _page(title, body):
+# Reloading the page under someone mid-sentence would throw away a half-typed URL or
+# prompt, so the timer holds while a field is focused or has anything in it, and says so.
+# The countdown is not decoration: without it a page that reloads itself looks like a bug.
+_REFRESH_JS = """
+(function () {
+  var every = %d, left = every;
+  var out = document.getElementById("refresh-countdown");
+  function busy() {
+    var el = document.activeElement;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) return true;
+    var fields = document.querySelectorAll("input[type=text], textarea");
+    for (var i = 0; i < fields.length; i++) {
+      if (fields[i].value.trim()) return true;
+    }
+    return false;
+  }
+  setInterval(function () {
+    if (busy()) {
+      left = every;
+      if (out) out.textContent = "paused while you type";
+      return;
+    }
+    left -= 1;
+    if (left <= 0) { location.reload(); return; }
+    if (out) out.textContent = "refreshing in " + left + "s";
+  }, 1000);
+})();
+"""
+
+
+def _page(title, body, refresh=0):
+    # <noscript> carries the plain-HTML fallback: a browser without JS still keeps up,
+    # it just cannot pause for typing the way the script does.
+    head_extra = (
+        f'<noscript><meta http-equiv="refresh" content="{int(refresh)}"></noscript>'
+        if refresh
+        else ""
+    )
+    script = f"<script>{_REFRESH_JS % int(refresh)}</script>" if refresh else ""
     return (
         "<!doctype html><html><head>"
         '<meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{html.escape(title)}</title>"
+        f"{head_extra}"
         f"<style>{_CSS}</style>"
         "</head><body>"
         '<h1><a href="/">📼 ContentSummarizer</a></h1>'
         f"{body}"
+        f"{script}"
         "</body></html>"
+    )
+
+
+def _refresh_controls(refresh):
+    """The Refresh-now button and the auto-refresh segmented control."""
+    seg = []
+    for value in REFRESH_CHOICES:
+        label = "Off" if value == 0 else f"{value}s"
+        active = " active" if value == refresh else ""
+        seg.append(
+            '<form method="post" action="/settings/refresh">'
+            f'<input type="hidden" name="seconds" value="{value}">'
+            f'<button class="{active.strip()}">{label}</button></form>'
+        )
+    countdown = (
+        f' <span class="muted" id="refresh-countdown">refreshing in {refresh}s</span>'
+        if refresh
+        else ""
+    )
+    return (
+        '<div class="seg" style="margin-top:12px">'
+        '<a class="btn btn-quiet" href="/">&#8635; Refresh now</a>'
+        '<span class="muted">Auto-refresh:</span>'
+        f'{"".join(seg)}{countdown}'
+        "</div>"
     )
 
 
@@ -219,6 +447,25 @@ def _meta_html(text):
     return f'<div class="muted">{html.escape(meta)}</div>' if meta else ""
 
 
+def _body_without_title(text, title):
+    """The summary minus its own first-line title, which the page shows as a heading.
+
+    Only strips a line that IS the title, so a summary that opens straight into prose
+    keeps every word.
+    """
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        if line.strip() == (title or "").strip():
+            rest = lines[index + 1 :]
+            while rest and not rest[0].strip():
+                rest.pop(0)
+            return "\n".join(rest)
+        break
+    return text
+
+
 def _summary_files():
     files = glob.glob(os.path.join(_summary_dir(), "*.txt"))
     files.extend(glob.glob(os.path.join(_summary_dir(), "*.md")))
@@ -229,8 +476,39 @@ def _summary_files():
     )
 
 
+def _transcript_dir():
+    """Raw transcripts sit in a subfolder of the summary folder (see drain.py)."""
+    return os.path.join(_summary_dir(), drain.TRANSCRIPT_DIR)
+
+
+def _transcript_files():
+    return sorted(
+        glob.glob(os.path.join(_transcript_dir(), "*.txt")),
+        key=os.path.getmtime,
+        reverse=True,
+    )
+
+
+def _transcript_path(stem):
+    """The transcript file for a summary stem, or None when there isn't one.
+
+    Transcripts share their summary's filename, so the two are always one lookup
+    apart — that pairing is what lets a summary page link to its own source.
+    """
+    path = os.path.join(_transcript_dir(), stem + ".txt")
+    return path if os.path.isfile(path) else None
+
+
+def _has_summary(stem):
+    return any(
+        os.path.isfile(os.path.join(_summary_dir(), stem + ext))
+        for ext in (".txt", ".md")
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
-def home():
+def home(cs_refresh: str = Cookie(default="0")):
+    refresh = _refresh_seconds(cs_refresh)
     s = worker.snapshot()
 
     queue_err = None
@@ -257,16 +535,17 @@ def home():
             else ""
         )
         rows.append(
-            f'<li>#{issue["number"]} '
+            f'<li><span class="muted">#{issue["number"]}</span> '
             f'<a href="{html.escape(issue["html_url"])}" target="_blank">'
-            f'{html.escape(issue["title"])}</a>{badge}{retry}</li>'
+            f'{html.escape(issue["title"])}</a>{badge}'
+            f'<span class="when">{retry}</span></li>'
         )
     if queue_err:
-        queue_html = f'<p class="muted">Could not reach GitHub: {html.escape(queue_err)}</p>'
+        queue_html = f'<p class="empty">Could not reach GitHub: {html.escape(queue_err)}</p>'
     elif rows:
-        queue_html = "<ul>" + "".join(rows) + "</ul>"
+        queue_html = '<ul class="list">' + "".join(rows) + "</ul>"
     else:
-        queue_html = '<p class="muted">Queue is empty.</p>'
+        queue_html = '<p class="empty">Queue is empty.</p>'
 
     items = []
     for path in _summary_files()[:20]:
@@ -280,13 +559,37 @@ def home():
             title = stem
         date = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(path)))
         items.append(
-            f'<li><a href="/s/{stem}">{html.escape(title)}</a> '
-            f'<span class="muted">{date}</span>{meta}</li>'
+            f'<li><a href="/s/{stem}">{html.escape(title)}</a>'
+            f'<span class="when">{date}</span>{meta}</li>'
         )
     summaries_html = (
-        "<ul>" + "".join(items) + "</ul>"
+        '<ul class="list">' + "".join(items) + "</ul>"
         if items
-        else '<p class="muted">No summaries yet.</p>'
+        else '<p class="empty">No summaries yet.</p>'
+    )
+
+    transcript_items = []
+    for path in _transcript_files()[:20]:
+        stem = os.path.splitext(os.path.basename(path))[0]
+        try:
+            title = _summary_title(open(path, encoding="utf-8").read()) or stem
+        except OSError:
+            title = stem
+        date = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(path)))
+        # Marking the ones with no summary answers the only question this list
+        # raises: which of these were transcript-only jobs?
+        badge = (
+            "" if _has_summary(stem) else ' <span class="badge raw">raw only</span>'
+        )
+        transcript_items.append(
+            f'<li><a href="/t/{stem}">{html.escape(title)}</a>{badge}'
+            f'<span class="when">{date}</span></li>'
+        )
+    transcripts_html = (
+        '<ul class="list">' + "".join(transcript_items) + "</ul>"
+        if transcript_items
+        else '<p class="empty">No transcripts yet. Every video processed from now '
+        "on keeps one.</p>"
     )
 
     provider = os.environ.get("SUMMARY_PROVIDER", "openai")
@@ -296,13 +599,16 @@ def home():
 
     gpu_html = ""
     if pipeline._gpu_node_url():
-        online = pipeline.gpu_node_online()
+        online = _gpu_online_cached()
         gpu_badge = (
             '<span class="badge on">online</span>'
             if online
             else '<span class="badge off">offline</span>'
         )
-        gpu_html = f"<span><b>GPU PC:</b> {gpu_badge}</span>"
+        gpu_html = (
+            '<div class="stat"><span class="stat-label">GPU PC</span>'
+            f'<span class="stat-value">{gpu_badge}</span></div>'
+        )
 
     if NO_WORKER:
         seg_html = ""
@@ -324,24 +630,43 @@ def home():
             f'<div class="seg"><span class="muted">Transcription:</span>{"".join(seg)}'
             '<span class="muted">(resets to .env on restart)</span></div>'
         )
+        # Drain does real work, so it keeps the filled button; refreshing only
+        # re-reads a page and sits below it as a quiet one.
         controls_html = (
-            '<p style="margin-bottom:0"><form class="inline" method="post" '
-            'action="/drain" style="margin-left:0"><button>Drain now</button></form></p>'
+            '<div class="row"><form method="post" action="/drain">'
+            "<button>Drain now</button></form></div>"
         )
         meta_html = (
-            f'<p class="muted">summaries via {html.escape(provider)} · '
+            f'<p class="muted">Summaries via {html.escape(provider)} · '
             f"polling every {worker.poll_seconds}s</p>"
         )
+    # Both modes get it: viewer mode is exactly when the page cannot know that the
+    # external runner has finished something.
+    controls_html += _refresh_controls(refresh)
+
+    stats = [
+        '<div class="stat"><span class="stat-label">State</span>'
+        f'<span class="stat-value">{html.escape(str(s["state"]))}</span></div>'
+    ]
+    if not NO_WORKER:
+        stats.append(
+            '<div class="stat"><span class="stat-label">Last poll</span>'
+            f'<span class="stat-value">{_ago(s["last_poll"])} '
+            f'<span class="muted">{html.escape(s["last_result"] or "—")}</span>'
+            "</span></div>"
+        )
+        stats.append(
+            '<div class="stat"><span class="stat-label">Lifetime</span>'
+            f'<span class="stat-value">{s["ok_total"]} ok · {s["failed_total"]} failed'
+            "</span></div>"
+        )
+    stats.append(gpu_html)
 
     body = f"""
 <div class="card">
-  <div class="status-line">
-    <span><b>State:</b> {html.escape(str(s["state"]))}</span>
-    {"" if NO_WORKER else f'<span><b>Last poll:</b> {_ago(s["last_poll"])} ({html.escape(s["last_result"] or "—")})</span>'}
-    {"" if NO_WORKER else f'<span><b>Lifetime:</b> {s["ok_total"]} ok / {s["failed_total"]} failed</span>'}
-    {gpu_html}
-  </div>
+  <div class="stats">{"".join(stats)}</div>
   {meta_html}
+  <hr class="card-divider">
   {seg_html}
   {controls_html}
 </div>
@@ -350,14 +675,21 @@ def home():
 <div class="card">
   <form method="post" action="/queue">
     <input type="text" name="url" placeholder="https://www.youtube.com/watch?v=..." required>
+    <div class="choice">
+      <label><input type="radio" name="mode" value="summary" checked> AI summary</label>
+      <label><input type="radio" name="mode" value="raw"> Transcript only</label>
+    </div>
+    <p class="muted field-hint">Transcript only skips the AI entirely: no summary,
+      no API cost, just every word that was said.</p>
     <textarea name="prompt" rows="3" placeholder="Optional: tell the AI how to summarize this one — e.g. &quot;focus on the investing advice and list every ticker mentioned&quot;"></textarea>
     <p class="muted field-hint">Leave the prompt empty for the normal summary.
+      It is ignored for a transcript-only job.
       Detail: <select name="detail">
         <option value="default" selected>default</option>
         <option value="simple">simple</option>
         <option value="detailed">detailed</option>
         <option value="complex">complex</option>
-      </select></p>
+      </select> (summary only).</p>
     <button>Queue it</button>
   </form>
 </div>
@@ -367,14 +699,23 @@ def home():
 
 <h2>Summaries</h2>
 <div class="card">
-  <form method="get" action="/search">
-    <input type="text" name="q" placeholder="Search summaries...">
+  <form class="searchbar" method="get" action="/search">
+    <input type="search" name="q" placeholder="Search summaries and transcripts&hellip;" aria-label="Search summaries and transcripts">
     <button>Search</button>
   </form>
+  <hr class="card-divider">
   {summaries_html}
 </div>
+
+<h2>Transcripts</h2>
+<div class="card">
+  <p class="muted" style="margin-top:0">The full text each summary was written
+    from, kept on this machine.</p>
+  <hr class="card-divider">
+  {transcripts_html}
+</div>
 """
-    return _page("ContentSummarizer", body)
+    return _page("ContentSummarizer", body, refresh=refresh)
 
 
 @app.get("/s/{stem}", response_class=HTMLResponse)
@@ -386,19 +727,71 @@ def summary_page(stem: str):
     path = txt_path if os.path.isfile(txt_path) else md_path
     if not os.path.isfile(path):
         return HTMLResponse(
-            _page("Not found", '<p>No such summary.</p><p><a href="/">← back</a></p>'),
+            _page(
+                "Not found",
+                '<div class="card"><p class="empty">No such summary.</p></div>'
+                '<p class="backlink" style="margin-top:18px">'
+                '<a href="/">&larr; Back</a></p>',
+            ),
             status_code=404,
         )
     text = open(path, encoding="utf-8").read()
+    title = _summary_title(text) or stem
     if path.endswith(".txt"):
-        body = f'<pre style="white-space:pre-wrap">{html.escape(text)}</pre>'
+        # The first line is the title; showing it as a heading rather than as the first
+        # line of body text is most of what makes this read like a document.
+        body = (
+            f"<h1>{html.escape(title)}</h1>"
+            f"<pre>{html.escape(_body_without_title(text, title))}</pre>"
+        )
     else:
         # Model output is untrusted; escaping first prevents raw-HTML/script
         # injection while retaining the useful Markdown structure.
         body = md.markdown(html.escape(text), extensions=["extra"])
+    # The one link worth having on a summary: what it was actually built from.
+    source = (
+        f' &middot; <a href="/t/{stem}">Read the full transcript</a>'
+        if _transcript_path(stem)
+        else ""
+    )
     return _page(
-        _summary_title(text) or stem,
-        f'<p><a href="/">← back</a></p>{_meta_html(text)}<article class="prose">{body}</article>',
+        title,
+        f'<p class="backlink"><a href="/">&larr; Back</a>{source}</p>'
+        f'{_meta_html(text)}<article class="prose">{body}</article>',
+    )
+
+
+@app.get("/t/{stem}", response_class=HTMLResponse)
+def transcript_page(stem: str):
+    """The raw pre-summary text, shown as the document it is."""
+    if not _STEM_RE.match(stem):
+        return HTMLResponse("Bad name", status_code=400)
+    path = _transcript_path(stem)
+    if not path:
+        return HTMLResponse(
+            _page(
+                "Not found",
+                '<div class="card"><p class="empty">No transcript saved for that '
+                "video. Only videos processed since transcripts were kept have "
+                "one.</p></div>"
+                '<p class="backlink" style="margin-top:18px">'
+                '<a href="/">&larr; Back</a></p>',
+            ),
+            status_code=404,
+        )
+    text = open(path, encoding="utf-8").read()
+    title = _summary_title(text) or stem
+    summary_link = (
+        f' &middot; <a href="/s/{stem}">Read the summary</a>'
+        if _has_summary(stem)
+        else ""
+    )
+    return _page(
+        f"Transcript: {title}",
+        f'<p class="backlink"><a href="/">&larr; Back</a>{summary_link}</p>'
+        f'<article class="prose"><h1>{html.escape(title)}</h1>'
+        f'<p class="muted">Full transcript &mdash; the text the summarizer reads.</p>'
+        f"<pre>{html.escape(_body_without_title(text, title))}</pre></article>",
     )
 
 
@@ -408,33 +801,50 @@ def search(q: str = ""):
     results = []
     if q:
         needle = q.lower()
-        for path in _summary_files():
+        # Transcripts are searched as well as summaries — a half-remembered
+        # phrase from a video is usually in the transcript and nowhere else. A
+        # summary wins when both match, so the readable version comes first.
+        seen = set()
+        for path, kind in [(p, "s") for p in _summary_files()] + [
+            (p, "t") for p in _transcript_files()
+        ]:
+            stem = os.path.splitext(os.path.basename(path))[0]
+            if (stem, kind) in seen or (kind == "t" and (stem, "s") in seen):
+                continue
             try:
                 text = open(path, encoding="utf-8").read()
             except OSError:
                 continue
-            if needle in text.lower():
-                stem = os.path.splitext(os.path.basename(path))[0]
-                line = next(
-                    (l for l in text.splitlines() if needle in l.lower()), ""
-                )
-                results.append((stem, _summary_title(text) or stem, line, _meta_html(text)))
+            if needle not in text.lower():
+                continue
+            seen.add((stem, kind))
+            line = next((l for l in text.splitlines() if needle in l.lower()), "")
+            results.append((kind, stem, _summary_title(text) or stem, line, _meta_html(text)))
 
     items = "".join(
-        f'<li><a href="/s/{stem}">{html.escape(title)}</a>{meta}'
-        f'<div class="muted">{html.escape(line[:180])}</div></li>'
-        for stem, title, line, meta in results
+        f'<li><a href="/{kind}/{stem}">{html.escape(title)}</a>'
+        + ('<span class="badge raw">transcript</span>' if kind == "t" else "")
+        + meta
+        + f'<p class="snippet">{html.escape(line[:180])}</p></li>'
+        for kind, stem, title, line, meta in results
     )
-    hits = (
-        f"<ul>{items}</ul>"
-        if items
-        else ('<p class="muted">No matches.</p>' if q else "")
-    )
+    if items:
+        count = len(results)
+        hits = (
+            f'<h2>{count} match{"" if count == 1 else "es"}</h2>'
+            f'<div class="card"><ul class="list">{items}</ul></div>'
+        )
+    elif q:
+        hits = '<div class="card"><p class="empty">No matches.</p></div>'
+    else:
+        hits = ""
     body = f"""
-<p><a href="/">← back</a></p>
+<p class="backlink"><a href="/">&larr; Back</a></p>
 <div class="card">
-  <form method="get" action="/search">
-    <input type="text" name="q" value="{html.escape(q, quote=True)}" placeholder="Search summaries...">
+  <form class="searchbar" method="get" action="/search">
+    <input type="search" name="q" value="{html.escape(q, quote=True)}"
+           placeholder="Search summaries and transcripts&hellip;"
+           aria-label="Search summaries and transcripts">
     <button>Search</button>
   </form>
 </div>
@@ -445,22 +855,32 @@ def search(q: str = ""):
 
 @app.post("/queue")
 def queue_video(
-    url: str = Form(...), prompt: str = Form(""), detail: str = Form("default")
+    url: str = Form(...),
+    prompt: str = Form(""),
+    mode: str = Form("summary"),
+    detail: str = Form("default"),
 ):
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         return HTMLResponse(
             _page(
                 "Error",
-                "<p>That doesn't look like a URL.</p>"
-                '<p><a href="/">← back</a></p>',
+                '<div class="card"><p class="empty">That doesn&rsquo;t look like a URL.'
+                "</p></div>"
+                '<p class="backlink" style="margin-top:18px"><a href="/">&larr; Back</a></p>',
             ),
             status_code=400,
         )
+    try:
+        mode = pipeline.normalize_output_mode(mode)
+    except pipeline.PipelineError:
+        mode = "summary"  # a tampered form field is not a reason to lose the video
     prompt = pipeline.normalize_custom_prompt(prompt)
     detail = (detail or "").strip().lower()
     detail = detail if detail in drain.DETAIL_LEVELS else None
-    worker.gh.create_issue(url, body=drain.build_issue_body(prompt, detail))
+    worker.gh.create_issue(
+        url, body=drain.build_issue_body(prompt, detail=detail, mode=mode)
+    )
     worker.request_drain()
     return RedirectResponse("/", status_code=303)
 
@@ -481,6 +901,22 @@ def set_transcribe_mode(mode: str = Form(...)):
         os.environ["TRANSCRIBE_BACKEND"] = mode
         log.info("transcription mode set to %s", mode)
     return RedirectResponse("/", status_code=303)
+
+
+@app.post("/settings/refresh")
+def set_refresh(seconds: str = Form("0")):
+    """Remember this browser's auto-refresh choice. Per-device, so the phone on the
+    kitchen counter and the PC someone is typing at can differ."""
+    value = _refresh_seconds(seconds)
+    response = RedirectResponse("/", status_code=303)
+    response.set_cookie(
+        REFRESH_COOKIE,
+        str(value),
+        max_age=REFRESH_COOKIE_MAX_AGE,
+        samesite="lax",
+        httponly=False,
+    )
+    return response
 
 
 @app.post("/retry/{number}")

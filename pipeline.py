@@ -1,9 +1,12 @@
-"""pipeline.py — Turn a YouTube URL into a plain-text summary.
+"""pipeline.py — Turn a YouTube URL into a plain-text summary or transcript.
 
 Given a video URL the pipeline (1) fetches existing captions with yt-dlp,
 (2) falls back to a configured transcription backend when a video has no
-captions, and (3) summarizes the transcript with OpenAI or Anthropic. It returns
-finished plain text ready to save and commit.
+captions, and (3) either summarizes that transcript with OpenAI or Anthropic or
+hands it straight back, depending on the requested output mode. Either way the
+full transcript comes back with the result so the caller can keep it: it is the
+complete text every summary is built from, and once the job is over it is
+otherwise gone.
 """
 
 from __future__ import annotations
@@ -27,9 +30,24 @@ from openai import OpenAI
 
 log = logging.getLogger(__name__)
 
-# Models used for summarization, one per provider — both fast and cheap.
-ANTHROPIC_SUMMARY_MODEL = "claude-haiku-4-5"
-OPENAI_SUMMARY_MODEL_DEFAULT = "gpt-4o-mini"
+# Models used for summarization, one per provider. Depth beats speed here —
+# summaries are study notes, so both defaults are the strong general models
+# rather than the cheap fast tiers. Override per provider with
+# ANTHROPIC_SUMMARY_MODEL / OPENAI_SUMMARY_MODEL.
+ANTHROPIC_SUMMARY_MODEL_DEFAULT = "claude-sonnet-5"
+OPENAI_SUMMARY_MODEL_DEFAULT = "gpt-4o"
+
+# What a queued video turns into: an AI summary, or the raw transcript with no
+# model involved. Raw mode is the honest cheap path — no API call, no
+# interpretation, just every word that was said.
+OUTPUT_MODES = ("summary", "raw")
+_MODE_ALIASES = {
+    "summary": "summary",
+    "summarize": "summary",
+    "raw": "raw",
+    "transcript": "raw",
+    "transcript-only": "raw",
+}
 
 # Local Whisper settings for the caption-less fallback path.
 WHISPER_MODEL = "large-v3"
@@ -356,10 +374,13 @@ def _download_subs(url, workdir, auto):
     return vtts[0] if vtts else None
 
 
-def fetch_captions(url):
-    """Fetch captions for a video, preferring manual subs over auto-generated.
+def fetch_captions_with_source(url):
+    """Fetch captions, preferring manual subs over auto-generated ones.
 
-    Returns plain text, or None when the video has no captions at all.
+    Returns (text, source) where source is "manual captions" or
+    "auto-generated captions", or (None, "") when the video has neither. The
+    source travels with the text because the saved transcript should say where
+    its words came from — auto captions mishear names, manual ones rarely do.
     """
     with tempfile.TemporaryDirectory() as workdir:
         path = _download_subs(url, workdir, auto=False)
@@ -368,10 +389,16 @@ def fetch_captions(url):
             path = _download_subs(url, workdir, auto=True)
             source = "auto"
         if not path:
-            return None
+            return None, ""
         log.info("using %s captions", source)
+        label = "manual captions" if source == "manual" else "auto-generated captions"
         with open(path, encoding="utf-8") as fh:
-            return strip_vtt(fh.read())
+            return strip_vtt(fh.read()), label
+
+
+def fetch_captions(url):
+    """Fetch captions for a video as plain text, or None when there are none."""
+    return fetch_captions_with_source(url)[0]
 
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -641,11 +668,14 @@ _SUMMARY_SYSTEM = (
     "itself: state the actual claims, mechanisms, numbers, steps, and "
     "definitions so a reader learns the material without watching. Never "
     'report that a topic was "discussed" or "covered" - write what was said. '
-    'Output plain text only: ALL-CAPS section headers, "-" bullets kept to '
-    "1-2 short lines each, no markdown, no preamble, and never repeat the "
-    "video title. The transcript may contain [m:ss] timestamps; when a bullet "
-    "cites a specific claim, number, or step, append the relevant timestamp in "
-    "brackets at the end of that bullet, and never invent one."
+    "Preserve every exact data point: keep figures with their units, "
+    "timeframes, and populations; name the studies, texts, thinkers, and "
+    "sources the speaker names instead of writing \"research shows\". "
+    'Output plain text only: ALL-CAPS section headers, "-" bullets, no '
+    "markdown, no preamble, and never repeat the video title. The transcript "
+    "may contain [m:ss] timestamps; when a bullet cites a specific claim, "
+    "number, or step, append the relevant timestamp in brackets at the end of "
+    "that bullet, and never invent one."
 )
 
 # Learning-first prompt set: every level must TEACH the content (claim +
@@ -654,7 +684,7 @@ _SUMMARY_SYSTEM = (
 # small summarizer models, so keep them when editing.
 SUMMARY_DETAILS = {
     "simple": {
-        "max_tokens": 700,
+        "max_tokens": 1000,
         "instructions": """\
 Write the shortest notes that still teach the video's substance. Use these
 sections unless the requester's added instructions say otherwise:
@@ -664,7 +694,7 @@ CORE IDEA
 itself (what is true, or what to do and why) - not what the video is about.
 
 KEY LESSONS
-3-6 bullets. Each bullet must teach one complete idea on its own: the claim or
+4-7 bullets. Each bullet must teach one complete idea on its own: the claim or
 technique, the mechanism or steps that make it work, and the specific number,
 definition, or reason given.
 Bad (topic mention): "- Use tools like Spreeder to improve reading speed."
@@ -675,6 +705,8 @@ flash one word at a time so you can't subvocalize, roughly doubling speed."
 Rules:
 - Test each bullet: could the reader explain or apply it without watching? If
   not, add the missing mechanism or cut the bullet.
+- Keep exact figures with their units and context; never blur a number the
+  speaker gave into "significantly" or "a lot".
 - Name a technique, term, or framework only together with its actual steps or
   meaning.
 - Attribute contested or opinion claims to the speaker; use only what the
@@ -684,31 +716,35 @@ Rules:
 """,
     },
     "detailed": {
-        "max_tokens": 1500,
+        "max_tokens": 2800,
         "instructions": """\
 Write study notes that teach every substantive lesson plus its evidence. Use
 these sections unless the requester's added instructions say otherwise, and
 omit any section the video gives nothing real for:
 
 CORE IDEA
-1-2 sentences stating the single most important lesson as the lesson itself -
-not what the video is about.
+2-3 sentences stating the central thesis as the lesson itself - not what the
+video is about - plus why it matters according to the speaker. In a debate or
+interview, also name the precise question the disagreement turns on.
 
 KEY LESSONS
-8-12 bullets - capture every substantive lesson the video teaches; do not stop
+10-16 bullets - capture every substantive lesson the video teaches; do not stop
 at the obvious few. Each bullet must teach one complete idea on its own: the
 claim or technique, the mechanism or steps that make it work, and the
 definition, number, or reason given. Prefer the specific, non-obvious insight
-over the generic restatement.
+over the generic restatement. In debates or interviews, attribute each claim to
+its speaker by name and keep opposing arguments as separate bullets.
 Bad (topic mention): "- Covers spaced repetition for studying."
 Good (the actual lesson): "- Spaced repetition: review material just before you
 would forget it (e.g. days 1, 3, 7, 21); recalling at the point of
 near-forgetting strengthens memory far more than same-day rereading."
 
 EVIDENCE & NUMBERS
-Bullets pairing each specific statistic, study, price, date, or example with
-the claim it supports. Keep exact values; do not round away precision. Skip
-anything already fully stated in KEY LESSONS.
+Bullets pairing each specific statistic, study, price, date, dosage, or example
+with the claim it supports. Keep exact values with units, timeframes, and
+populations; do not round away precision, and name the source the speaker names
+(the study, text, or person, not "research shows"). Skip anything already fully
+stated in KEY LESSONS.
 
 Rules:
 - Test each bullet: could the reader explain or apply it without watching? If
@@ -724,7 +760,7 @@ Rules:
 """,
     },
     "complex": {
-        "max_tokens": 3200,
+        "max_tokens": 6000,
         "instructions": """\
 Write complete study notes: the reader should come away understanding the
 arguments, the evidence, and their limits without watching. Use these sections
@@ -732,17 +768,23 @@ unless the requester's added instructions say otherwise, and omit any section
 the video gives nothing real for:
 
 CORE IDEA
-2-3 sentences: the central thesis stated as the lesson itself, and why it
-matters according to the speaker.
+2-4 sentences: the central thesis stated as the lesson itself, and why it
+matters according to the speaker. In a debate or interview, state the precise
+question the disagreement turns on - the crux both sides would have to settle -
+and each side's answer to it in one sentence apiece.
 
 ARGUMENTS & LESSONS
 Bullets covering every substantive claim as a complete reasoning chain: the
 claim, the mechanism or logic behind it, and the consequence drawn (a
-reasoning-chain bullet may run 3 lines). Be exhaustive - one bullet per distinct
-lesson or argument, including the non-obvious ones raised in passing; do not
-compress several lessons into one. For how-to content: each step, how to do it,
-and why it works. In debates or interviews, attribute each position by name and
-keep opposing chains separate; give minor tangents one line or none.
+reasoning-chain bullet may run 3-4 lines). Be exhaustive - one bullet per
+distinct lesson or argument, including the non-obvious ones raised in passing;
+do not compress several lessons into one. For how-to content: each step, how to
+do it, and why it works. For scientific or medical content: the mechanism (how
+the intervention or process actually works in the body), the effect size, and
+for whom it applies. In debates or interviews, attribute each position by name,
+keep opposing chains separate, and follow each key exchange to its outcome -
+who conceded, rebutted, or left the point unanswered; give minor tangents one
+line or none.
 Bad (topic mention): "- Explains why index funds beat stock picking."
 Good (the actual lesson): "- Index funds beat most stock pickers, the host
 argues: after 1-2% annual fees plus trading costs, over 80% of active funds
@@ -755,8 +797,12 @@ steps exactly as used in the video.
 
 EVIDENCE & NUMBERS
 Each statistic, study, example, or story paired with the claim it supports and
-how strong the speaker treats it as being. Keep exact values; do not round away
-precision.
+how strong the speaker treats it as being. Keep exact values with their units,
+sample sizes, dosages, timeframes, and populations; do not round away
+precision. Cite sources as the speaker cites them - the named study, author,
+text, or passage (e.g. a specific paper, book, or verse), never a vague
+"studies show". Quote a sentence verbatim in quotation marks when its exact
+wording carries the argument.
 
 COUNTERPOINTS & LIMITS
 Objections raised or conceded, conditions where the advice fails, and
@@ -768,7 +814,8 @@ Rules:
 - Test each bullet: could the reader explain, defend, or apply it without
   watching? If not, add the missing mechanism or cut it.
 - Be exhaustive: surface every real lesson and argument, not just the headline
-  ones. A genuine insight buried in an example still earns a bullet.
+  ones. A genuine insight buried in an example still earns a bullet. Length is
+  no concern as long as every line teaches something real.
 - Use only what the transcript says, never outside facts.
 - Do not add reflection, encouragement, or generic to-do advice the video did
   not give.
@@ -780,12 +827,23 @@ Rules:
 
 
 def normalize_summary_detail(value):
-    detail = (value or "simple").strip().lower()
+    detail = (value or "detailed").strip().lower()
     if detail not in SUMMARY_DETAILS:
         raise PipelineError(
             f"Unknown summary detail {detail!r}; expected simple, detailed, or complex"
         )
     return detail
+
+
+def normalize_output_mode(value):
+    """Return "summary" or "raw". An unrecognized mode is an error, not a guess."""
+    mode = (value or "summary").strip().lower()
+    resolved = _MODE_ALIASES.get(mode)
+    if resolved is None:
+        raise PipelineError(
+            f"Unknown output mode {mode!r}; expected 'summary' or 'raw'"
+        )
+    return resolved
 
 
 def normalize_custom_prompt(value):
@@ -825,10 +883,11 @@ def _summary_prompt(transcript, detail, custom_prompt="", channel=None):
 
 def _summarize_anthropic(transcript, api_key, detail, custom_prompt="",
                          channel=None):
+    model = os.environ.get("ANTHROPIC_SUMMARY_MODEL", ANTHROPIC_SUMMARY_MODEL_DEFAULT)
     client = Anthropic(api_key=api_key) if api_key else Anthropic()
     try:
         response = client.messages.create(
-            model=ANTHROPIC_SUMMARY_MODEL,
+            model=model,
             max_tokens=SUMMARY_DETAILS[detail]["max_tokens"],
             system=_SUMMARY_SYSTEM,
             messages=[
@@ -885,7 +944,7 @@ def summarize(transcript, api_key=None, detail=None, custom_prompt=None,
         transcript = transcript[:MAX_TRANSCRIPT_CHARS]
 
     detail = normalize_summary_detail(
-        detail or os.environ.get("SUMMARY_DETAIL", "simple")
+        detail or os.environ.get("SUMMARY_DETAIL", "detailed")
     )
     custom_prompt = normalize_custom_prompt(custom_prompt)
     provider = os.environ.get("SUMMARY_PROVIDER", "openai").strip().lower()
@@ -913,58 +972,97 @@ def _metadata_line(meta):
     return " | ".join(parts)
 
 
-def summarize_video(url, force_whisper=False, api_key=None, detail=None,
-                    custom_prompt=None):
-    """Turn a YouTube URL into finished summary markdown.
+def fetch_transcript(url, force_whisper=False):
+    """Return {"text", "source"} — every word of the video, however we got it."""
+    if not force_whisper:
+        transcript, source = fetch_captions_with_source(url)
+        if transcript:
+            return {"text": transcript, "source": source}
+        log.info("no captions found; falling back to transcription")
+    else:
+        log.info("force_whisper set; skipping captions")
+    return {"text": transcribe(url), "source": "transcribed audio"}
 
-    Returns {"title": ..., "markdown": ...}. Raises PipelineError on failure.
+
+def transcript_document(title, url, transcript, source):
+    """The saved raw log: a short header, then the transcript, unedited.
+
+    The header is there so a file found months later still says what it is, and
+    the counts are there because "did this video even have a usable transcript?"
+    is the first question anyone asks of a thin summary.
+    """
+    words = len(transcript.split())
+    return (
+        f"{title}\n"
+        f"{url}\n"
+        f"Transcript from {source} — {words:,} words, {len(transcript):,} characters\n"
+        f"\n{transcript.strip()}\n"
+    )
+
+
+def summarize_video(url, force_whisper=False, api_key=None, detail=None,
+                    custom_prompt=None, mode="summary"):
+    """Turn a YouTube URL into finished text.
+
+    ``mode`` decides what comes back as ``text``: "summary" runs the transcript
+    through the model, "raw" skips the model entirely and hands back the
+    transcript itself. Either way the result carries the transcript and a
+    ready-to-save ``transcript_text`` copy of it — the caller keeps that log
+    whichever output was asked for.
+
+    Raises PipelineError on failure.
     """
     url = validate_youtube_url(url)
+    mode = normalize_output_mode(mode)
     meta = get_metadata(url)
     title = meta["title"]
 
-    transcript = None
-    if force_whisper:
-        log.info("force_whisper set; skipping captions")
-    else:
-        transcript = fetch_captions(url)
-
-    if not transcript:
-        if not force_whisper:
-            log.info("no captions found; falling back to transcription")
-        transcript = transcribe(url)
+    fetched = fetch_transcript(url, force_whisper=force_whisper)
+    transcript = fetched["text"]
+    if not transcript.strip():
+        raise PipelineError("no transcript text could be obtained for this video")
+    log_text = transcript_document(title, url, transcript, fetched["source"])
 
     detail = normalize_summary_detail(
-        detail or os.environ.get("SUMMARY_DETAIL", "simple")
+        detail or os.environ.get("SUMMARY_DETAIL", "detailed")
     )
     custom_prompt = normalize_custom_prompt(custom_prompt)
-    body = summarize(
-        transcript,
-        api_key=api_key,
-        detail=detail,
-        custom_prompt=custom_prompt,
-        channel=meta.get("channel"),
-    )
-    if not body:
-        raise PipelineError("summarizer returned empty output")
 
-    # Record the instruction in the file so a summary always explains why it
-    # looks the way it does.
-    header = f"{title}\n{url}\n"
-    meta_line = _metadata_line(meta)
-    if meta_line:
-        header += meta_line + "\n"
-    if custom_prompt:
-        header += f"Prompt: {' '.join(custom_prompt.split())}\n"
-    text = f"{header}\n{body}\n"
+    if mode == "raw":
+        text = log_text  # no API call at all; the transcript is the deliverable
+    else:
+        body = summarize(
+            transcript,
+            api_key=api_key,
+            detail=detail,
+            custom_prompt=custom_prompt,
+            channel=meta.get("channel"),
+        )
+        if not body:
+            raise PipelineError("summarizer returned empty output")
+
+        # Record the instruction in the file so a summary always explains why it
+        # looks the way it does.
+        header = f"{title}\n{url}\n"
+        meta_line = _metadata_line(meta)
+        if meta_line:
+            header += meta_line + "\n"
+        if custom_prompt:
+            header += f"Prompt: {' '.join(custom_prompt.split())}\n"
+        text = f"{header}\n{body}\n"
+
     return {
         "id": meta["id"],
         "title": title,
+        "mode": mode,
         "channel": meta.get("channel"),
         "duration": meta.get("duration"),
         "upload_date": meta.get("upload_date"),
         "detail": detail,
         "custom_prompt": custom_prompt,
+        "transcript": transcript,
+        "transcript_source": fetched["source"],
+        "transcript_text": log_text,
         "text": text,
         # Backward-compatible key for GitHub comments and older callers.
         "markdown": text,

@@ -20,15 +20,45 @@ commits the summary back to the repo.
   2. **Fallback:** if there are no captions, download `bestaudio` with `yt-dlp`
      and transcribe locally with `faster-whisper` (`large-v3`, `device="cuda"`,
      `compute_type="float16"`). Set `FORCE_WHISPER=1` to always skip captions.
-  3. Summarize the transcript with the Anthropic API (`claude-haiku-4-5`) into a
-     one-line TL;DR, key-point bullets, and notable claims/takeaways.
+  3. Summarize the transcript with the configured provider (`claude-sonnet-5`
+     via Anthropic, or `gpt-4o` via OpenAI — overridable with
+     `ANTHROPIC_SUMMARY_MODEL` / `OPENAI_SUMMARY_MODEL`) into dense study
+     notes: the core idea, every substantive argument or lesson with its
+     mechanism, and exact figures/citations as given in the video.
   4. Return readable plain text in the selected Simple, Detailed, or Complex
-     format.
+     format (Detailed is the default).
 
 Repository copies are written to
 `summaries/<sanitized-title>--<youtube-id>.txt`. The desktop app also writes
 them directly to the folder selected in its GUI, including Google Drive for
 desktop folders.
+
+### Output mode: summary or raw transcript
+
+Every video is queued as one of two things, chosen per video in the desktop app
+and on the web page:
+
+- **AI summary** (the default) — the pipeline as described above.
+- **Transcript only** — step 3 is skipped entirely. No model call, no API cost,
+  no interpretation: you get every word that was said.
+
+An issue with no mode marker summarizes, so anything queued before this existed
+(or straight from the iOS Shortcut) behaves exactly as it always has.
+
+### Transcripts are kept
+
+Whichever mode a video was queued in, the full transcript is saved to
+`<summary folder>/transcripts/<same-filename>.txt` — the complete text the
+summary was built from, with a one-line header saying where the words came from
+(manual captions, auto-generated captions, or transcribed audio) and how many
+there were.
+
+These files stay on the machine that made them: raw transcripts are bulk source
+text, so they are never committed to the repo (`summaries/transcripts/` is
+gitignored). A transcript shares its summary's filename, which is what lets
+either GUI jump between the two. Transcripts of raw-mode jobs are reported back
+on the GitHub issue as a comment, truncated to the 65,536 characters GitHub
+accepts.
 
 ## Repo layout
 
@@ -41,7 +71,10 @@ requirements.txt
 .gitignore
 README.md
 MOBILE_SHORTCUT.md  # iOS Shortcut recipe to add videos from your phone
+CLAUDE.md           # AI context index (AGENTS.md is a copy — edit CLAUDE.md, re-copy)
+docs/decisions/     # why the queue, library, and deployment choices are what they are
 summaries/          # generated summaries land here
+summaries/transcripts/  # raw pre-summary text, local only (gitignored)
 ```
 
 ## Setup (Windows desktop, RTX 3080 Ti / CUDA)
@@ -84,8 +117,10 @@ summaries/          # generated summaries land here
 | `OPENAI_API_KEY`    | usually  | Required when `SUMMARY_PROVIDER=openai` (the default).             |
 | `ANTHROPIC_API_KEY` | alternate| Required only when `SUMMARY_PROVIDER=anthropic`.                   |
 | `FORCE_WHISPER`     | no       | Set to `1` to always transcribe with Whisper and skip captions.   |
-| `SUMMARY_DETAIL`    | no       | `simple`, `detailed`, or `complex` (GUI choice overrides this).   |
+| `SUMMARY_DETAIL`    | no       | `simple`, `detailed` (default), or `complex` (GUI choice overrides this). |
 | `SUMMARY_FOLDER`    | no       | Output folder for CLI/server runs; the GUI has a folder picker.   |
+| `ANTHROPIC_SUMMARY_MODEL` | no | Override the Anthropic summary model (default `claude-sonnet-5`). |
+| `OPENAI_SUMMARY_MODEL` | no    | Override the OpenAI summary model (default `gpt-4o`).             |
 
 `.env` is git-ignored (it's the first entry in `.gitignore`). **Only ever commit
 `.env.example` with empty placeholders — never real keys.**
@@ -185,6 +220,28 @@ The executable deliberately does not embed `.env`, ffmpeg, or the local CUDA
 stack. It supports caption extraction plus the OpenAI/remote-GPU transcription
 backends used by the mini PC.
 
+In the window:
+
+- The **summary list refreshes itself** every few seconds. When the worker
+  finishes a video, the new file is announced in the status strip, chimes
+  (toggle: *Chime on new summary*), and opens in the **Preview** pane — no
+  clicking around to find out whether it worked.
+- **Preview** reads the summary in-app; *Open in editor*, *Copy text*,
+  *Show newest*, and *View transcript* sit under it. Double-click a row to open
+  the `.txt`.
+- **Show: Summaries / Transcripts** switches the list between the two folders.
+  *View transcript* / *View summary* jumps between the two halves of whatever is
+  selected.
+- **Output: AI summary / Transcript only** picks what the next queued video
+  becomes. It resets to *AI summary* after each video is queued.
+- **Find** filters the saved files by any words in the title.
+- The header shows a coloured listening dot, done/failed counts, and a
+  progress bar while a video is actually being processed.
+- **Queue** and **Activity** share a tabbed pane. Failed queue rows are red.
+- **Paste** pulls a YouTube link off the clipboard; a link copied while the URL
+  box is empty is offered automatically. `F5` refreshes, `Ctrl+L` jumps to the
+  URL box, `Ctrl+Enter` queues from the prompt box.
+
 ## Local server (`serve.py`)
 
 ```powershell
@@ -200,6 +257,11 @@ One process does everything:
 - **Dashboard** at `http://<this-pc>:8787` — queue view, paste-a-URL box,
   *Drain now*, per-video *Retry*, and a searchable summary reader that
   auto-syncs from the repo.
+- **Keeping the page current**: *Refresh now*, plus an **Auto-refresh** choice
+  of Off / 15s / 30s / 60s. The choice is remembered per browser (a cookie), so
+  the phone propped up in the kitchen can refresh itself while the PC you type
+  on stays still. The countdown pauses whenever a field is focused or has
+  anything in it, so a reload never eats a half-typed URL or prompt.
 - Startup prints the local + LAN URLs. Stop with Ctrl+C.
 - Later, bundle it: `pyinstaller --onefile serve.py` → `dist\serve.exe`.
 
@@ -223,8 +285,11 @@ any always-on box (e.g. a mini PC) — no GPU needed:
 
 - **Worker**: polls the queue every `POLL_INTERVAL_SECONDS` (default 120) and
   summarizes videos as they arrive.
-- **Dashboard**: a LAN web UI on port 8787 — queue view, paste-a-URL box,
-  *Drain now*, per-video *Retry*, and browsable/searchable summaries.
+- **Dashboard**: a LAN web UI on port 8787 — queue view, paste-a-URL box with
+  an *AI summary / Transcript only* choice, *Drain now*, per-video *Retry*,
+  browsable summaries and transcripts (search covers both, so a half-remembered
+  phrase finds its video even when no summary quotes it), and a per-browser
+  auto-refresh (Off / 15s / 30s / 60s) so a page left open keeps up.
 - **Transcription without a GPU**: with `TRANSCRIBE_BACKEND=auto` (the
   default), caption-less videos use the desktop's GPU node (`gpu_node.py`,
   below) whenever that PC is on, else the OpenAI audio API. `openai`, `local`

@@ -1,4 +1,4 @@
-# 0009 — Retry cap and the `summarize-gave-up` label
+# 0010 — Retry cap and the `summarize-gave-up` label
 
 Date: 2026-10-04
 

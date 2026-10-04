@@ -1,4 +1,4 @@
-# 0008 — Canonical watch URL; dedupe by video id
+# 0009 — Canonical watch URL; dedupe by video id
 
 Date: 2026-10-04
 

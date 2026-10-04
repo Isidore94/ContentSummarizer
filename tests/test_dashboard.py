@@ -44,14 +44,20 @@ class DashboardTests(unittest.TestCase):
         self._queue(prompt="focus on tickers")
         body = self.worker.gh.create_issue.call_args.kwargs["body"]
         self.assertEqual(drain.parse_issue_options(body),
-                         {"prompt": "focus on tickers", "detail": None})
+                         {"prompt": "focus on tickers", "detail": None, "mode": "summary"})
 
     def test_queue_with_detail(self):
         self._queue(prompt="focus on tickers", detail="complex")
         body = self.worker.gh.create_issue.call_args.kwargs["body"]
         self.assertTrue(body.startswith("detail: complex\n"))
         self.assertEqual(drain.parse_issue_options(body),
-                         {"prompt": "focus on tickers", "detail": "complex"})
+                         {"prompt": "focus on tickers", "detail": "complex", "mode": "summary"})
+
+    def test_queue_mode_and_detail_both_pass_through(self):
+        self._queue(prompt="", detail="simple", mode="raw")
+        body = self.worker.gh.create_issue.call_args.kwargs["body"]
+        opts = drain.parse_issue_options(body)
+        self.assertEqual((opts["detail"], opts["mode"]), ("simple", "raw"))
 
     def test_queue_detail_only_and_bogus(self):
         self._queue(prompt="", detail="simple")

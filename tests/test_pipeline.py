@@ -262,7 +262,8 @@ class SummaryPromptTests(unittest.TestCase):
 class SummarizeVideoHeaderTests(unittest.TestCase):
     def _run(self, meta, custom_prompt=None):
         with mock.patch.object(pipeline, "get_metadata", return_value=meta), \
-                mock.patch.object(pipeline, "fetch_captions", return_value="cap"), \
+                mock.patch.object(pipeline, "fetch_captions_with_source",
+                                  return_value=("cap", "manual captions")), \
                 mock.patch.object(pipeline, "summarize", return_value="BODY") as summ:
             result = pipeline.summarize_video(
                 f"https://youtu.be/{VID}?si=x&list=PL", custom_prompt=custom_prompt

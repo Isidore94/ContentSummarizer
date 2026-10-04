@@ -135,12 +135,27 @@ class SummaryConfigurationTests(unittest.TestCase):
                         "summary_folder": str(Path(tmp) / "Drive"),
                         "summary_detail": "detailed",
                         "auto_start": False,
+                        "notify_sound": False,
                     }
                 )
                 loaded = app_config.load_settings()
         self.assertEqual(loaded["summary_detail"], "detailed")
         self.assertFalse(loaded["auto_start"])
+        self.assertFalse(loaded["notify_sound"])
         self.assertTrue(str(loaded["summary_folder"]).endswith("Drive"))
+
+    def test_settings_written_before_the_chime_option_still_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(
+                os.environ, {"CONTENT_SUMMARIZER_DATA_DIR": tmp}, clear=False
+            ):
+                app_config.settings_path().write_text(
+                    '{"summary_folder": "X", "summary_detail": "simple",'
+                    ' "auto_start": true}',
+                    encoding="utf-8",
+                )
+                loaded = app_config.load_settings()
+        self.assertTrue(loaded["notify_sound"])
 
 
 class OutputTests(unittest.TestCase):
@@ -211,6 +226,364 @@ class SafetyTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "2026.test")
 
 
+class WebRefreshTests(unittest.TestCase):
+    """The LAN page can keep itself up to date, per browser.
+
+    Everything the worker does happens elsewhere, so the page a phone is left open on
+    goes stale silently: the summary lands, the queue empties, and the screen still
+    shows the state from whenever it was loaded.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import dashboard
+        from fastapi.testclient import TestClient
+
+        class _StubWorker:
+            poll_seconds = 120
+            gh = None
+
+            def snapshot(self):
+                return {
+                    "state": "idle",
+                    "last_poll": None,
+                    "last_result": "",
+                    "ok_total": 0,
+                    "failed_total": 0,
+                }
+
+        cls.dashboard = dashboard
+        dashboard.attach_worker(_StubWorker(), summary_dir=tempfile.mkdtemp())
+        # The stub has no GitHub client; home() already renders the queue error path.
+        cls.client = TestClient(dashboard.app)
+
+    def test_refresh_choice_is_only_ever_one_of_the_offered_intervals(self):
+        for good in self.dashboard.REFRESH_CHOICES:
+            self.assertEqual(self.dashboard._refresh_seconds(str(good)), good)
+        for bad in ("", "  ", "7", "-30", "abc", None, "99999999", "30; drop table"):
+            self.assertEqual(self.dashboard._refresh_seconds(bad), 0)
+
+    def test_page_is_static_until_auto_refresh_is_turned_on(self):
+        page = self.client.get("/").text
+        self.assertIn("Refresh now", page)  # the manual option is always there
+        self.assertIn("Auto-refresh:", page)
+        self.assertNotIn("location.reload", page)
+        self.assertNotIn("http-equiv", page)
+
+    def test_choosing_an_interval_makes_the_page_reload_itself(self):
+        self.client.post("/settings/refresh", data={"seconds": "30"})
+        page = self.client.get("/").text
+        self.assertIn("location.reload", page)
+        self.assertIn("refreshing in 30s", page)
+        # A browser without JS still keeps up, via plain HTML.
+        self.assertIn('<meta http-equiv="refresh" content="30">', page)
+
+    def test_the_choice_survives_a_reload_and_can_be_turned_back_off(self):
+        self.client.post("/settings/refresh", data={"seconds": "60"})
+        self.assertEqual(self.client.cookies.get(self.dashboard.REFRESH_COOKIE), "60")
+        self.assertIn("refreshing in 60s", self.client.get("/").text)
+
+        self.client.post("/settings/refresh", data={"seconds": "0"})
+        page = self.client.get("/").text
+        self.assertNotIn("location.reload", page)
+        self.assertNotIn("http-equiv", page)
+
+    def test_a_tampered_cookie_cannot_turn_into_a_reload_loop(self):
+        self.client.cookies.set(self.dashboard.REFRESH_COOKIE, "1")
+        page = self.client.get("/").text
+        self.assertNotIn("location.reload", page)
+        self.client.cookies.delete(self.dashboard.REFRESH_COOKIE)
+
+    def test_reloading_holds_while_someone_is_typing(self):
+        """A page that reloaded under a half-typed URL would throw the URL away."""
+        self.client.post("/settings/refresh", data={"seconds": "15"})
+        page = self.client.get("/").text
+        self.assertIn("paused while you type", page)
+        self.assertIn("activeElement", page)
+        self.client.post("/settings/refresh", data={"seconds": "0"})
+
+    def test_a_summary_shows_its_title_as_a_heading_exactly_once(self):
+        d = self.dashboard
+        text = "The Big IQ Controversy\n\nCORE IDEA\nTests measure a narrow band.\n"
+        self.assertEqual(
+            d._body_without_title(text, "The Big IQ Controversy"),
+            "CORE IDEA\nTests measure a narrow band.",
+        )
+
+    def test_a_summary_that_opens_in_prose_keeps_every_word(self):
+        d = self.dashboard
+        text = "IQ tests measure a narrow band.\nAnd a second line.\n"
+        self.assertEqual(d._body_without_title(text, "Something else entirely"), text)
+        # The detected title IS the first line here, so stripping it is correct and
+        # must not also eat the line after it.
+        self.assertEqual(
+            d._body_without_title(text, "IQ tests measure a narrow band."),
+            "And a second line.",
+        )
+
+    def test_the_gpu_badge_is_not_probed_on_every_reload(self):
+        """A switched-off GPU PC costs a multi-second timeout. Paying it once per page
+        load was tolerable; paying it every 15 seconds under auto-refresh is not."""
+        self.dashboard._gpu_status["checked_at"] = 0.0
+        with mock.patch(
+            "dashboard.pipeline.gpu_node_online", return_value=True
+        ) as probe:
+            for _ in range(5):
+                self.dashboard._gpu_online_cached()
+        self.assertEqual(probe.call_count, 1)
+
+    def test_other_pages_do_not_reload_themselves(self):
+        """Auto-refresh belongs to the dashboard; a summary being read must sit still."""
+        self.client.post("/settings/refresh", data={"seconds": "30"})
+        for path in ("/search?q=test", "/s/nope"):
+            page = self.client.get(path).text
+            self.assertNotIn("location.reload", page, path)
+        self.client.post("/settings/refresh", data={"seconds": "0"})
+
+
+class TranscriptTests(unittest.TestCase):
+    """The transcript is the whole text a summary is built from.
+
+    Before this it existed only in memory for the length of one API call: a thin
+    or wrong summary could never be checked against what was actually said, and
+    a video that only needed its words could not be had without paying a model
+    to rewrite them.
+    """
+
+    METADATA = {"id": "abc123", "title": "A Talk"}
+    URL = "https://www.youtube.com/watch?v=abc123DEF45"
+
+    def _patched(self, summarize):
+        """A run with the network and the model stubbed out, shape intact."""
+        return mock.patch.multiple(
+            pipeline,
+            get_metadata=lambda url: dict(self.METADATA),
+            fetch_transcript=lambda url, force_whisper=False: {
+                "text": "every word of it",
+                "source": "manual captions",
+            },
+            summarize=summarize,
+        )
+
+    def test_a_mode_is_either_summarize_or_do_not(self):
+        for value in ("summary", "Summary", " summarize ", None, ""):
+            self.assertEqual(pipeline.normalize_output_mode(value), "summary")
+        for value in ("raw", "RAW", "transcript", "transcript-only"):
+            self.assertEqual(pipeline.normalize_output_mode(value), "raw")
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.normalize_output_mode("summarise-ish")
+
+    def test_raw_mode_never_calls_the_model(self):
+        def refuse(*args, **kwargs):
+            raise AssertionError("raw mode must not call the summarizer")
+
+        with self._patched(refuse):
+            result = pipeline.summarize_video(self.URL, mode="raw")
+        self.assertEqual(result["mode"], "raw")
+        self.assertIn("every word of it", result["text"])
+        self.assertIn("A Talk", result["text"])
+
+    def test_a_summary_still_carries_the_transcript_it_came_from(self):
+        with self._patched(lambda transcript, **kwargs: "The gist."):
+            result = pipeline.summarize_video(self.URL, mode="summary")
+        self.assertIn("The gist.", result["text"])
+        self.assertNotIn("every word of it", result["text"])  # a summary is a summary
+        self.assertEqual(result["transcript"], "every word of it")
+        self.assertIn("every word of it", result["transcript_text"])
+        self.assertIn("manual captions", result["transcript_text"])
+
+    def test_an_empty_transcript_fails_loudly_instead_of_summarizing_nothing(self):
+        empty = mock.patch.multiple(
+            pipeline,
+            get_metadata=lambda url: dict(self.METADATA),
+            fetch_transcript=lambda url, force_whisper=False: {
+                "text": "   ",
+                "source": "captions",
+            },
+        )
+        with empty, self.assertRaises(pipeline.PipelineError):
+            pipeline.summarize_video(self.URL)
+
+    def test_the_mode_survives_the_trip_through_the_issue_body(self):
+        self.assertEqual(drain.parse_issue_mode(drain.build_issue_body("", "raw")), "raw")
+        # An unmarked issue - every one queued before today - still summarizes.
+        self.assertEqual(drain.parse_issue_mode(None), "summary")
+        self.assertEqual(drain.parse_issue_mode("just a note"), "summary")
+        self.assertIsNone(drain.build_issue_body("", "summary"))
+
+    def test_the_mode_marker_is_never_mistaken_for_a_prompt(self):
+        self.assertEqual(drain.parse_issue_prompt(drain.build_issue_body("", "raw")), "")
+        both = drain.build_issue_body("Only the numbers.", "raw")
+        self.assertEqual(drain.parse_issue_mode(both), "raw")
+        self.assertEqual(drain.parse_issue_prompt(both), "Only the numbers.")
+
+    def test_an_unreadable_mode_summarizes_rather_than_dropping_the_video(self):
+        self.assertEqual(
+            drain.parse_issue_mode(drain.MODE_MARKER + " sideways"), "summary"
+        )
+
+    def test_a_transcript_is_kept_for_every_job_and_raw_ones_stay_local(self):
+        commits = []
+
+        class FakeGitHub:
+            def commit_file(self, path, content, message):
+                commits.append(path)
+
+            def file_exists(self, path):
+                return False  # nothing summarized yet; the dedupe check passes
+
+            def comment(self, number, body):
+                self.body = body
+
+            def close_issue(self, number):
+                self.closed = number
+
+        def fake_summarize_video(url, **kwargs):
+            mode = kwargs["mode"]
+            spoken = "line one. line two."
+            return {
+                "id": "abc123",
+                "title": "A Talk",
+                "mode": mode,
+                "detail": "detailed",
+                "custom_prompt": "",
+                "transcript": spoken,
+                "transcript_source": "manual captions",
+                "transcript_text": spoken,
+                "text": spoken if mode == "raw" else "The gist.",
+                "markdown": "",
+            }
+
+        for mode, expect_commit in (("summary", True), ("raw", False)):
+            with tempfile.TemporaryDirectory() as folder:
+                issue = {
+                    "number": 7,
+                    "title": self.URL,
+                    "body": drain.build_issue_body("", mode),
+                    "labels": [],
+                }
+                with mock.patch.object(
+                    pipeline, "summarize_video", side_effect=fake_summarize_video
+                ), mock.patch.object(
+                    pipeline,
+                    "get_metadata",
+                    return_value={"id": "abc123DEF45", "title": "A Talk"},
+                ):
+                    outcome = drain.process_issue(
+                        FakeGitHub(), issue, False, output_dir=folder
+                    )
+                transcript = Path(outcome["transcript_path"])
+                self.assertTrue(transcript.is_file(), mode)
+                self.assertEqual(transcript.parent.name, drain.TRANSCRIPT_DIR)
+                self.assertIn("line one", transcript.read_text(encoding="utf-8"))
+                # A raw job commits nothing and writes no summary file, so the
+                # repo and the summary list both stay honest.
+                self.assertEqual(bool(commits), expect_commit, mode)
+                self.assertEqual(bool(outcome["local_path"]), expect_commit, mode)
+                commits.clear()
+
+    def test_a_transcript_comment_cannot_exceed_what_github_accepts(self):
+        bounded = drain.bounded_comment("word " * 40_000)
+        self.assertLessEqual(len(bounded), 65_536)
+        self.assertIn("Truncated here", bounded)
+        self.assertEqual(drain.bounded_comment("short"), "short")  # fits, untouched
+
+
+class WebTranscriptTests(unittest.TestCase):
+    """The web page has to offer the raw option and show what it produced."""
+
+    @classmethod
+    def setUpClass(cls):
+        import dashboard
+        from fastapi.testclient import TestClient
+
+        cls.folder = Path(tempfile.mkdtemp())
+        transcripts = cls.folder / drain.TRANSCRIPT_DIR
+        transcripts.mkdir()
+        blank = chr(10) + chr(10)
+        (cls.folder / "a-talk--abc123.txt").write_text(
+            "A Talk" + blank + "The gist.", encoding="utf-8"
+        )
+        (transcripts / "a-talk--abc123.txt").write_text(
+            "A Talk" + blank + "every word of it", encoding="utf-8"
+        )
+        (transcripts / "raw-only--def456.txt").write_text(
+            "Raw Only" + blank + "unsummarized words", encoding="utf-8"
+        )
+
+        class _StubGitHub:
+            def __init__(self):
+                self.created = []
+
+            def create_issue(self, title, body=None):
+                self.created.append((title, body))
+                return {"number": len(self.created)}
+
+            def open_issues(self):
+                return []
+
+        class _StubWorker:
+            poll_seconds = 120
+
+            def __init__(self):
+                self.gh = _StubGitHub()
+
+            def snapshot(self):
+                return {
+                    "state": "idle",
+                    "last_poll": None,
+                    "last_result": "",
+                    "ok_total": 0,
+                    "failed_total": 0,
+                }
+
+            def request_drain(self):
+                pass
+
+        cls.dashboard = dashboard
+        cls.worker = _StubWorker()
+        dashboard.attach_worker(cls.worker, summary_dir=str(cls.folder))
+        cls.client = TestClient(dashboard.app)
+
+    def _queue(self, **data):
+        data.setdefault("url", "https://www.youtube.com/watch?v=abc123")
+        self.client.post("/queue", data=data, follow_redirects=False)
+        return self.worker.gh.created[-1][1]
+
+    def test_the_page_offers_both_outputs_with_summary_preselected(self):
+        page = self.client.get("/").text
+        self.assertIn('value="summary" checked', page)
+        self.assertIn('value="raw"', page)
+        self.assertIn("Transcript only", page)
+
+    def test_asking_for_a_transcript_queues_a_transcript_job(self):
+        self.assertEqual(drain.parse_issue_mode(self._queue(mode="raw")), "raw")
+
+    def test_the_default_and_a_tampered_mode_both_summarize(self):
+        self.assertEqual(drain.parse_issue_mode(self._queue()), "summary")
+        self.assertEqual(drain.parse_issue_mode(self._queue(mode="../etc")), "summary")
+
+    def test_transcripts_are_listed_and_readable(self):
+        page = self.client.get("/").text
+        self.assertIn("/t/a-talk--abc123", page)
+        self.assertIn("raw only", page.lower())  # badge on a transcript-only job
+        self.assertIn("every word of it", self.client.get("/t/a-talk--abc123").text)
+
+    def test_a_summary_links_to_the_transcript_it_was_written_from(self):
+        page = self.client.get("/s/a-talk--abc123").text
+        self.assertIn("/t/a-talk--abc123", page)
+        self.assertIn("The gist.", page)
+
+    def test_search_reaches_words_that_only_exist_in_the_transcript(self):
+        self.assertIn(
+            "/t/raw-only--def456", self.client.get("/search?q=unsummarized").text
+        )
+
+    def test_a_transcript_page_cannot_be_talked_out_of_its_folder(self):
+        for path in ("/t/..%2F..%2Fsecret", "/t/nothing-here", "/t/a.b"):
+            self.assertIn(self.client.get(path).status_code, (400, 404), path)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -219,32 +592,32 @@ class IssueOptionsTests(unittest.TestCase):
     def test_detail_only(self):
         self.assertEqual(
             drain.parse_issue_options("detail: complex"),
-            {"prompt": "", "detail": "complex"},
+            {"prompt": "", "detail": "complex", "mode": "summary"},
         )
 
     def test_prompt_only(self):
         self.assertEqual(
             drain.parse_issue_options("Just the numbers."),
-            {"prompt": "Just the numbers.", "detail": None},
+            {"prompt": "Just the numbers.", "detail": None, "mode": "summary"},
         )
 
     def test_detail_plus_plain_prompt_case_and_whitespace_insensitive(self):
         opts = drain.parse_issue_options("  LEVEL :  Detailed  \nFocus on risks.")
-        self.assertEqual(opts, {"prompt": "Focus on risks.", "detail": "detailed"})
+        self.assertEqual(opts, {"prompt": "Focus on risks.", "detail": "detailed", "mode": "summary"})
 
     def test_detail_plus_marker_fenced_prompt_round_trips(self):
         body = drain.build_issue_body("List every ticker.", detail="simple")
         self.assertTrue(body.startswith("detail: simple\n"))
         self.assertEqual(
             drain.parse_issue_options(body),
-            {"prompt": "List every ticker.", "detail": "simple"},
+            {"prompt": "List every ticker.", "detail": "simple", "mode": "summary"},
         )
         self.assertEqual(drain.parse_issue_prompt(body), "List every ticker.")
 
     def test_invalid_detail_is_ignored_and_stripped(self):
         with self.assertLogs("drain", level="WARNING"):
             opts = drain.parse_issue_options("detail: huge\nBe brief.")
-        self.assertEqual(opts, {"prompt": "Be brief.", "detail": None})
+        self.assertEqual(opts, {"prompt": "Be brief.", "detail": None, "mode": "summary"})
 
     def test_prose_starting_with_detail_word_stays_in_prompt(self):
         opts = drain.parse_issue_options("Detail: focus on the numbers")
@@ -270,7 +643,8 @@ class ProcessIssueTests(unittest.TestCase):
             validate_youtube_url=mock.Mock(side_effect=lambda u: u),
             get_metadata=mock.Mock(return_value={"id": "abc123DEF45", "title": "T"}),
             summarize_video=mock.Mock(
-                return_value={"id": "abc123DEF45", "title": "T", "text": "fresh"}
+                return_value={"id": "abc123DEF45", "title": "T", "text": "fresh",
+                              "transcript_text": "raw words"}
             ),
         )
         patcher.start()

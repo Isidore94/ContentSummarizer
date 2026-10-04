@@ -29,13 +29,48 @@ ticker mentioned"*. Leave the prompt empty for the normal Simple/Detailed/Comple
 summary. The prompt travels in the queue issue's body and is recorded in the
 finished `.txt` on a `Prompt:` line, so a summary always explains its own shape.
 
+## Summary or raw transcript
+
+**Output** picks what the next queued video becomes:
+
+- **AI summary** (the default) — the normal Simple/Detailed/Complex summary.
+- **Transcript only** — the AI is skipped entirely. No model call, no API cost,
+  no interpretation: you get every word that was said.
+
+The choice resets to *AI summary* after each video is queued, so a one-off raw
+job cannot silently become the new default. The AI prompt is ignored for a
+transcript-only job. The same two options are on the web GUI, and the iPhone
+Shortcut can ask for a raw transcript too (see MOBILE_SHORTCUT.md).
+
+## Transcripts are kept for every video
+
+Whichever output you asked for, the full transcript is saved to a
+`transcripts` subfolder of your summary folder, under the same filename as the
+summary. It opens with a line saying where the words came from — manual
+captions, auto-generated captions, or transcribed audio — and how many there
+were.
+
+This is the complete text the summary was written from. Keep it and a summary
+that reads thin or wrong can be checked against what was actually said, instead
+of being re-run at full cost on a hunch.
+
+- **Show: Summaries / Transcripts** switches the list between the two folders.
+- **View transcript** / **View summary** jumps between the two halves of
+  whatever is selected.
+- Changing your summary folder moves the transcripts with it.
+- Transcripts stay on this PC. They are never committed to the repository —
+  they are bulk source text, and a long video's transcript is far larger than
+  its summary. A transcript-only job reports back on the GitHub issue as a
+  comment (truncated if the video is long) and saves the whole thing here.
+
 ## Web GUI for other PCs on your network
 
 When the listener starts, the app also serves the web GUI on this PC's network
 address — the window shows the link (e.g. `http://192.168.0.223:8787`) with
 **Open** and **Copy link** buttons. Any PC, tablet, or phone on the same network
-can open that link to queue videos (prompt box included), watch the queue, and
-read summaries. Notes:
+can open that link to queue videos (prompt box and summary/transcript choice
+included), watch the queue, and read both the summaries and the transcripts
+they were written from. Notes:
 
 - Windows Firewall needs an inbound rule for TCP 8787. If it's missing, run this
   once in an **admin** PowerShell:

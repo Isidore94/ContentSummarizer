@@ -20,3 +20,6 @@ env/
 # PyInstaller output
 build/
 dist/
+
+# Raw transcripts are kept locally beside the summaries, never committed.
+summaries/transcripts/

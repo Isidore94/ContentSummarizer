@@ -58,9 +58,11 @@ Two ways:
 
 ## Cost
 
-- **Summaries + transcription:** OpenAI usage on your key. Summaries are
-  fractions of a cent (gpt-4o-mini). Only *caption-less* videos hit the audio
-  API (~$0.006/audio-minute), and most videos have captions, so this is rare.
+- **Summaries + transcription:** OpenAI usage on your key. Summaries default to
+  `gpt-4o` for depth — typically a few cents per video (set
+  `OPENAI_SUMMARY_MODEL=gpt-4o-mini` to go back to fractions of a cent at lower
+  quality). Only *caption-less* videos hit the audio API
+  (~$0.006/audio-minute), and most videos have captions, so this is rare.
 - **Actions minutes:** private repos get 2,000 free minutes/month; each run is
   ~2 minutes. Making the repo **public** gives unlimited free Actions minutes
   if you ever get close.
