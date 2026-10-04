@@ -26,7 +26,7 @@ import requests
 from dotenv import load_dotenv
 
 import pipeline
-from app_config import executable_dir, normalize_detail
+from app_config import DETAIL_LEVELS, executable_dir, normalize_detail
 
 log = logging.getLogger("drain")
 
@@ -47,6 +47,24 @@ MAX_COMMENT_CHARS = 60_000
 # labeled issues until its retry window elapses (or the label is removed via
 # the dashboard's Retry button); a manual `python drain.py` retries them all.
 SKIP_LABEL = "summarize-failed"
+
+# Terminal state: the drainer stopped retrying (retry cap reached, or the error
+# can never succeed, e.g. a private video). Neither the worker nor a manual
+# drain touches these; removing the label re-queues the issue.
+GAVE_UP_LABEL = "summarize-gave-up"
+
+# A deliberate re-run: with this label the issue is summarized again even when
+# a summary for the video is already in the repo.
+RESUMMARIZE_LABEL = "resummarize"
+
+# Failures per issue before giving up (env MAX_FAILED_RETRIES overrides).
+MAX_RETRIES = 3
+
+# Comment markers. The drainer counts its own failure comments to enforce the
+# retry cap, so these strings are load-bearing: change them and old failures
+# stop being counted.
+FAILURE_MARKER = "Summarization failed"
+GAVE_UP_MARKER = "will not be retried automatically"
 
 
 def failure_message(exc, limit=1500):
@@ -94,6 +112,41 @@ def response_error(resp, limit=300):
     if len(detail) > limit:
         detail = detail[: limit - 1] + "…"
     return detail or resp.reason or "no detail"
+
+
+def max_retries():
+    """Retry cap from MAX_FAILED_RETRIES, falling back to MAX_RETRIES."""
+    try:
+        value = int(os.environ.get("MAX_FAILED_RETRIES") or MAX_RETRIES)
+    except ValueError:
+        return MAX_RETRIES
+    return max(1, value)
+
+
+# Error text that no amount of retrying fixes. Matched case-insensitively
+# against the exception message (yt-dlp wraps these in its own prefixes).
+_PERMANENT_PATTERNS = (
+    "private video",
+    "video unavailable",
+    "this video is unavailable",
+    "this video has been removed",
+    "this video is not available",
+    "members-only",
+    "members only",
+    "sign in to confirm your age",
+    "only youtube urls are accepted",
+    "invalid youtube url",
+)
+
+
+def is_permanent_failure(exc):
+    """True when retrying cannot help (private/removed video, bad URL...).
+
+    Transient problems (network, rate limits, LLM outages) return False so
+    they keep the normal retry-with-cap behaviour.
+    """
+    text = str(exc).lower()
+    return any(pattern in text for pattern in _PERMANENT_PATTERNS)
 
 
 def _require_env(name):
@@ -163,6 +216,22 @@ class GitHub:
     def comment(self, number, body):
         self._request("POST", f"issues/{number}/comments", json={"body": body})
 
+    def list_comments(self, number):
+        """Return every comment on an issue, oldest first."""
+        comments = []
+        page = 1
+        while True:
+            batch = self._request(
+                "GET",
+                f"issues/{number}/comments",
+                params={"per_page": 100, "page": page},
+            ).json()
+            comments.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        return comments
+
     def ensure_label(self, name, color="d93f0b", description=""):
         """Create the label in the repo if it doesn't exist yet."""
         resp = self.session.get(self._url(f"labels/{name}"), timeout=30)
@@ -210,6 +279,22 @@ class GitHub:
             payload["sha"] = sha
         self._request("PUT", f"contents/{path}", json=payload)
 
+    def file_exists(self, path):
+        """True when the repo has a file at `path`; False on 404.
+
+        Any other error (auth, outage) raises: guessing "absent" there would
+        make the drainer pay for a duplicate summary.
+        """
+        resp = self.session.get(self._url(f"contents/{path}"), timeout=30)
+        if resp.status_code == 404:
+            return False
+        if not resp.ok:
+            raise RuntimeError(
+                f"GitHub GET contents/{path} failed ({resp.status_code}): "
+                f"{response_error(resp)}"
+            )
+        return True
+
     def files_in_directory(self, path):
         """List repository files in a directory through the Contents API."""
         return self._request("GET", f"contents/{path}").json()
@@ -234,6 +319,12 @@ _PROMPT_RE = re.compile(
 )
 
 
+# Optional first line of the body picking this video's detail level, e.g.
+# "detail: complex". Lets the iOS Shortcut choose a level without a prompt.
+_DETAIL_LINE_RE = re.compile(
+    r"^[ \t]*(?:detail|level)[ \t]*:[ \t]*(\S+)[ \t]*(?:\r?\n|$)", re.IGNORECASE
+)
+
 # The output mode rides along in the same body: "summary" (the default, so an
 # unmarked issue behaves exactly as it always has) or "raw", which skips the
 # model and delivers the transcript itself.
@@ -242,14 +333,19 @@ MODE_HEADER = "**Transcript only — no AI summary.**"
 _MODE_RE = re.compile(re.escape(MODE_MARKER) + r"[ \t]*([A-Za-z-]+)")
 
 
-def build_issue_body(prompt, mode="summary"):
-    """Render the mode and any custom prompt into an issue body, or None.
+def build_issue_body(prompt, mode="summary", *, detail=None):
+    """Render detail line, mode block and any custom prompt into an issue body.
 
-    None means "nothing worth saying": the plain summarize-this-video case,
-    which is still the common one.
+    Returns None when there is nothing worth saying: the plain
+    summarize-this-video case, which is still the common one.
     """
     mode = pipeline.normalize_output_mode(mode)
+    detail = (detail or "").strip().lower()
+    if detail and detail not in DETAIL_LEVELS:
+        raise ValueError(f"unknown detail level: {detail!r}")
     blocks = []
+    if detail:
+        blocks.append(f"detail: {detail}\n")
     if mode != "summary":
         blocks.append(f"{MODE_HEADER}\n\n{MODE_MARKER} {mode}\n")
     prompt = (prompt or "").strip()
@@ -282,9 +378,34 @@ def _without_mode_block(text):
     return _MODE_RE.sub("", text).replace(MODE_HEADER, "")
 
 
-def parse_issue_prompt(body):
-    """Extract the custom prompt from an issue body; '' when there is none."""
-    text = _without_mode_block(body or "").strip()
+def parse_issue_options(body):
+    """Split an issue body into {"prompt", "detail", "mode"}.
+
+    A leading `detail:`/`level:` line sets the detail level and is stripped
+    from the prompt, as is the mode block. An invalid level is ignored (and
+    logged) rather than failing the video; the line is still removed so it
+    can't leak into the prompt.
+    """
+    text = (body or "").strip()
+    detail = None
+    match = _DETAIL_LINE_RE.match(text)
+    if match:
+        value = match.group(1).lower()
+        if value in DETAIL_LEVELS:
+            detail = value
+        else:
+            log.warning(
+                "ignoring invalid detail level %r in issue body (use %s)",
+                match.group(1),
+                "/".join(DETAIL_LEVELS),
+            )
+        text = text[match.end():].strip()
+    mode = parse_issue_mode(text)
+    text = _without_mode_block(text).strip()
+    return {"prompt": _extract_prompt(text), "detail": detail, "mode": mode}
+
+
+def _extract_prompt(text):
     if not text:
         return ""
     match = _PROMPT_RE.search(text)
@@ -294,6 +415,11 @@ def parse_issue_prompt(body):
         # Marked, but the fence was mangled (hand-edited on github.com).
         return text.split(PROMPT_MARKER, 1)[1].strip().strip("`").strip()
     return text
+
+
+def parse_issue_prompt(body):
+    """Extract the custom prompt from an issue body; '' when there is none."""
+    return parse_issue_options(body)["prompt"]
 
 
 _SLUG_STRIP = re.compile(r"[^\w\s-]")
@@ -369,12 +495,28 @@ def transcript_dir(output_dir):
     return Path(output_dir).expanduser() / TRANSCRIPT_DIR
 
 
+def _reuse_existing_summary(gh, issue, repo_path, filename, destination):
+    """Close an issue with a summary already in the repo; no LLM call."""
+    number = issue["number"]
+    text = gh.file_content(repo_path)
+    local_path = Path(destination).expanduser() / filename
+    if not local_path.exists():
+        write_summary(destination, filename, text)
+    gh.comment(
+        number, bounded_comment(f"(reusing existing summary for this video)\n\n{text}")
+    )
+    gh.close_issue(number)
+    return text, local_path
+
+
 def process_issue(gh, issue, force_whisper, *, detail=None, output_dir=None):
     """Run one issue's video through the pipeline, publish it, and close it."""
     number = issue["number"]
     url = pipeline.validate_youtube_url(issue["title"])
-    custom_prompt = parse_issue_prompt(issue.get("body"))
-    mode = parse_issue_mode(issue.get("body"))
+    options = parse_issue_options(issue.get("body"))
+    custom_prompt = options["prompt"]
+    mode = options["mode"]
+    labels = {l["name"] for l in issue.get("labels", [])}
     log.info(
         "issue #%s [%s]: %s%s",
         number,
@@ -383,7 +525,50 @@ def process_issue(gh, issue, force_whisper, *, detail=None, output_dir=None):
         " (custom prompt)" if custom_prompt else "",
     )
 
-    detail = normalize_detail(detail or os.environ.get("SUMMARY_DETAIL", "detailed"))
+    # The issue's own detail line wins over the worker/global default.
+    detail = normalize_detail(
+        options["detail"] or detail or os.environ.get("SUMMARY_DETAIL", "detailed")
+    )
+    destination = output_dir or os.environ.get("SUMMARY_FOLDER") or os.path.join(
+        REPO_DIR, SUMMARY_DIR
+    )
+
+    # Idempotency: the same video queued twice, or a previous pass that
+    # committed the file but failed to comment/close, must not pay for a
+    # second LLM summary. A custom prompt, an explicit detail line, raw mode,
+    # or the resummarize label means the user wants something different, so
+    # those skip the check.
+    # NOTE: get_metadata is called again inside summarize_video (an extra
+    # yt-dlp round trip). Pass the metadata through once pipeline allows it.
+    rerun = (
+        bool(custom_prompt)
+        or options["detail"] is not None
+        or mode != "summary"
+        or RESUMMARIZE_LABEL in labels
+    )
+    if not rerun:
+        meta = pipeline.get_metadata(url)
+        existing_name = summary_filename(meta["title"], meta.get("id"), number)
+        existing_path = f"{SUMMARY_DIR}/{existing_name}"
+        if gh.file_exists(existing_path):
+            log.info(
+                "issue #%s: summary %s already exists; reusing it, no LLM call",
+                number,
+                existing_path,
+            )
+            text, local_path = _reuse_existing_summary(
+                gh, issue, existing_path, existing_name, destination
+            )
+            _clear_failure_labels(gh, number, labels)
+            return {
+                "result": {"id": meta.get("id"), "title": meta["title"], "text": text},
+                "mode": mode,
+                "repo_path": existing_path,
+                "local_path": str(local_path),
+                "transcript_path": None,
+                "reused": True,
+            }
+
     result = pipeline.summarize_video(
         url,
         force_whisper=force_whisper,
@@ -392,9 +577,6 @@ def process_issue(gh, issue, force_whisper, *, detail=None, output_dir=None):
         mode=mode,
     )
     filename = summary_filename(result["title"], result.get("id"), number)
-    destination = output_dir or os.environ.get("SUMMARY_FOLDER") or os.path.join(
-        REPO_DIR, SUMMARY_DIR
-    )
 
     # Written for every job, whichever output was asked for: this is the whole
     # text the summary came from, and it stays on this machine. Same filename as
@@ -426,8 +608,7 @@ def process_issue(gh, issue, force_whisper, *, detail=None, output_dir=None):
             ),
         )
     gh.close_issue(number)
-    if any(l["name"] == SKIP_LABEL for l in issue.get("labels", [])):
-        gh.remove_label(number, SKIP_LABEL)  # succeeded on retry
+    _clear_failure_labels(gh, number, labels)
     log.info("issue #%s done -> %s", number, local_path or transcript_path)
     return {
         "result": result,
@@ -436,6 +617,83 @@ def process_issue(gh, issue, force_whisper, *, detail=None, output_dir=None):
         "local_path": str(local_path) if local_path else None,
         "transcript_path": str(transcript_path),
     }
+
+
+def _clear_failure_labels(gh, number, labels):
+    """Drop failure labels from an issue that has now succeeded."""
+    for name in (SKIP_LABEL, GAVE_UP_LABEL):
+        if name in labels:
+            gh.remove_label(number, name)
+
+
+def count_failures(comments):
+    """Count the drainer's failure comments since the last give-up.
+
+    A give-up comment resets the count, so removing the gave-up label gives
+    the issue a fresh set of retries instead of giving up on the first miss.
+    """
+    count = 0
+    for comment in comments:
+        body = comment.get("body") or ""
+        if GAVE_UP_MARKER in body:
+            count = 0
+        elif FAILURE_MARKER in body.split("\n", 1)[0]:
+            count += 1
+    return count
+
+
+def mark_failed(gh, issue, exc):
+    """Record a failed video on its issue; returns True if the drainer gave up.
+
+    Transient failures: comment + `summarize-failed` (retried later). The
+    retry cap or a permanent error (private/removed video, bad URL): comment,
+    then `summarize-gave-up`, which the worker and drain skip until a human
+    removes the label.
+    """
+    number = issue["number"]
+    permanent = is_permanent_failure(exc)
+    prior = 0
+    if not permanent:
+        # Count before commenting so this failure is added exactly once.
+        try:
+            prior = count_failures(gh.list_comments(number))
+        except Exception:
+            log.exception("could not read comments on #%s for the retry cap", number)
+    attempts = prior + 1
+    cap = max_retries()
+    give_up = permanent or attempts >= cap
+
+    outcome = (
+        "this error is permanent, so it will not be retried."
+        if permanent
+        else "giving up after repeated failures."
+        if give_up
+        else "will retry later."
+    )
+    gh.comment(
+        number,
+        f"⚠️ {FAILURE_MARKER}; {outcome}\n\n```\n{failure_message(exc)}\n```",
+    )
+    gh.add_label(number, SKIP_LABEL)
+    if give_up:
+        gh.ensure_label(
+            GAVE_UP_LABEL,
+            color="6e7781",
+            description="ContentSummarizer stopped retrying this video",
+        )
+        gh.add_label(number, GAVE_UP_LABEL)
+        why = (
+            "the error looks permanent (the video can't be fetched)"
+            if permanent
+            else f"it failed {attempts} times (limit {cap})"
+        )
+        gh.comment(
+            number,
+            f"🛑 Giving up: {why}. This issue {GAVE_UP_MARKER}. "
+            f"Remove the `{GAVE_UP_LABEL}` label to re-queue it.",
+        )
+        log.warning("issue #%s marked %s: %s", number, GAVE_UP_LABEL, why)
+    return give_up
 
 
 def main():
@@ -457,7 +715,11 @@ def main():
         gh.ensure_label(SKIP_LABEL, description="ContentSummarizer failed on this video")
     except Exception:
         log.exception("could not ensure the %s label exists", SKIP_LABEL)
-    issues = gh.open_issues()
+    issues = [
+        i
+        for i in gh.open_issues()
+        if not any(l["name"] == GAVE_UP_LABEL for l in i.get("labels", []))
+    ]
     log.info("%d open issue(s) to drain", len(issues))
 
     failures = 0
@@ -468,12 +730,7 @@ def main():
             failures += 1
             log.exception("issue #%s failed", issue["number"])
             try:
-                gh.comment(
-                    issue["number"],
-                    "⚠️ Summarization failed; leaving this issue open.\n\n"
-                    f"```\n{failure_message(exc)}\n```",
-                )
-                gh.add_label(issue["number"], SKIP_LABEL)
+                mark_failed(gh, issue, exc)
             except Exception:
                 log.exception("could not mark #%s as failed", issue["number"])
 

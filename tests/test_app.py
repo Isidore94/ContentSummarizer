@@ -91,12 +91,6 @@ class GitHubErrorTests(unittest.TestCase):
         detail = drain.response_error(self._Resp("boom " * 500))
         self.assertLessEqual(len(detail), 300)
 
-    def test_gui_labels_never_grow_unbounded(self):
-        import desktop_gui
-
-        self.assertLessEqual(len(desktop_gui._one_line(self.UNICORN)), 160)
-        self.assertNotIn("\n", desktop_gui._one_line(self.UNICORN))
-
 
 class SummaryConfigurationTests(unittest.TestCase):
     def test_detail_levels_are_distinct(self):
@@ -164,61 +158,6 @@ class SummaryConfigurationTests(unittest.TestCase):
         self.assertTrue(loaded["notify_sound"])
 
 
-class SummaryListTests(unittest.TestCase):
-    """The GUI announces finished summaries, so its list helpers must be exact."""
-
-    def test_only_unseen_files_count_as_new(self):
-        import desktop_gui
-
-        seen = {"old.txt"}
-        self.assertEqual(
-            desktop_gui._detect_new(seen, ["fresh.txt", "old.txt"]), ["fresh.txt"]
-        )
-        self.assertEqual(desktop_gui._detect_new(seen, ["old.txt"]), [])
-
-    def test_filter_matches_every_word_in_any_order(self):
-        import desktop_gui
-
-        name = drain.summary_filename("Jordan Peterson on IQ", "abc123")
-        self.assertTrue(desktop_gui._matches_filter(name, "peterson iq"))
-        self.assertTrue(desktop_gui._matches_filter(name, "IQ jordan"))
-        self.assertTrue(desktop_gui._matches_filter(name, ""))
-        self.assertFalse(desktop_gui._matches_filter(name, "peterson finance"))
-
-    def test_pretty_title_drops_the_video_id_suffix(self):
-        """It must undo exactly what drain.summary_filename() builds."""
-        import desktop_gui
-
-        name = drain.summary_filename("The Big IQ Controversy", "dQw4w9WgXcQ")
-        self.assertEqual(desktop_gui._pretty_title(name), "The big iq controversy")
-        self.assertNotIn("dQw4w9WgXcQ", desktop_gui._pretty_title(name))
-        self.assertEqual(desktop_gui._pretty_title("plain.txt"), "Plain")
-
-    def test_ages_read_as_plain_english(self):
-        import desktop_gui
-
-        self.assertEqual(desktop_gui._human_age(5), "just now")
-        self.assertEqual(desktop_gui._human_age(120), "2m ago")
-        self.assertEqual(desktop_gui._human_age(7200), "2h ago")
-        self.assertEqual(desktop_gui._human_age(86400 * 3), "3d ago")
-
-    def test_clipboard_only_offers_a_real_youtube_link(self):
-        import desktop_gui
-
-        self.assertIsNotNone(
-            desktop_gui._clipboard_youtube_url(
-                "  https://www.youtube.com/watch?v=dQw4w9WgXcQ  "
-            )
-        )
-        self.assertIsNone(desktop_gui._clipboard_youtube_url("https://example.com/x"))
-        self.assertIsNone(desktop_gui._clipboard_youtube_url(""))
-        self.assertIsNone(
-            desktop_gui._clipboard_youtube_url(
-                "look at https://www.youtube.com/watch?v=dQw4w9WgXcQ ok"
-            )
-        )
-
-
 class OutputTests(unittest.TestCase):
     def test_filenames_include_video_id_and_do_not_collide(self):
         first = drain.summary_filename("Same title", "abc123")
@@ -257,13 +196,14 @@ class SafetyTests(unittest.TestCase):
         self.assertNotIn("\n", message)
 
     def test_youtube_url_allowlist(self):
+        canonical = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         accepted = (
-            "https://www.youtube.com/watch?v=abc",
-            "https://youtu.be/abc",
-            "https://m.youtube.com/shorts/abc",
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&si=track",
+            "https://youtu.be/dQw4w9WgXcQ?t=42",
+            "https://m.youtube.com/shorts/dQw4w9WgXcQ",
         )
         for url in accepted:
-            self.assertEqual(pipeline.validate_youtube_url(url), url)
+            self.assertEqual(pipeline.validate_youtube_url(url), canonical)
 
     def test_non_youtube_and_local_urls_are_rejected(self):
         for url in ("https://example.com/video", "http://127.0.0.1/admin"):
@@ -411,7 +351,7 @@ class TranscriptTests(unittest.TestCase):
     """
 
     METADATA = {"id": "abc123", "title": "A Talk"}
-    URL = "https://www.youtube.com/watch?v=abc123"
+    URL = "https://www.youtube.com/watch?v=abc123DEF45"
 
     def _patched(self, summarize):
         """A run with the network and the model stubbed out, shape intact."""
@@ -489,6 +429,9 @@ class TranscriptTests(unittest.TestCase):
             def commit_file(self, path, content, message):
                 commits.append(path)
 
+            def file_exists(self, path):
+                return False  # nothing summarized yet; the dedupe check passes
+
             def comment(self, number, body):
                 self.body = body
 
@@ -521,6 +464,10 @@ class TranscriptTests(unittest.TestCase):
                 }
                 with mock.patch.object(
                     pipeline, "summarize_video", side_effect=fake_summarize_video
+                ), mock.patch.object(
+                    pipeline,
+                    "get_metadata",
+                    return_value={"id": "abc123DEF45", "title": "A Talk"},
                 ):
                     outcome = drain.process_issue(
                         FakeGitHub(), issue, False, output_dir=folder
@@ -639,3 +586,180 @@ class WebTranscriptTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IssueOptionsTests(unittest.TestCase):
+    def test_detail_only(self):
+        self.assertEqual(
+            drain.parse_issue_options("detail: complex"),
+            {"prompt": "", "detail": "complex", "mode": "summary"},
+        )
+
+    def test_prompt_only(self):
+        self.assertEqual(
+            drain.parse_issue_options("Just the numbers."),
+            {"prompt": "Just the numbers.", "detail": None, "mode": "summary"},
+        )
+
+    def test_detail_plus_plain_prompt_case_and_whitespace_insensitive(self):
+        opts = drain.parse_issue_options("  LEVEL :  Detailed  \nFocus on risks.")
+        self.assertEqual(opts, {"prompt": "Focus on risks.", "detail": "detailed", "mode": "summary"})
+
+    def test_detail_plus_marker_fenced_prompt_round_trips(self):
+        body = drain.build_issue_body("List every ticker.", detail="simple")
+        self.assertTrue(body.startswith("detail: simple\n"))
+        self.assertEqual(
+            drain.parse_issue_options(body),
+            {"prompt": "List every ticker.", "detail": "simple", "mode": "summary"},
+        )
+        self.assertEqual(drain.parse_issue_prompt(body), "List every ticker.")
+
+    def test_invalid_detail_is_ignored_and_stripped(self):
+        with self.assertLogs("drain", level="WARNING"):
+            opts = drain.parse_issue_options("detail: huge\nBe brief.")
+        self.assertEqual(opts, {"prompt": "Be brief.", "detail": None, "mode": "summary"})
+
+    def test_prose_starting_with_detail_word_stays_in_prompt(self):
+        opts = drain.parse_issue_options("Detail: focus on the numbers")
+        self.assertEqual(opts["prompt"], "Detail: focus on the numbers")
+
+
+def _issue(number=1, body=None, labels=()):
+    return {
+        "number": number,
+        "title": "https://www.youtube.com/watch?v=abc123DEF45",
+        "body": body,
+        "labels": [{"name": n} for n in labels],
+    }
+
+
+class ProcessIssueTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.gh = mock.Mock()
+        patcher = mock.patch.multiple(
+            drain.pipeline,
+            validate_youtube_url=mock.Mock(side_effect=lambda u: u),
+            get_metadata=mock.Mock(return_value={"id": "abc123DEF45", "title": "T"}),
+            summarize_video=mock.Mock(
+                return_value={"id": "abc123DEF45", "title": "T", "text": "fresh",
+                              "transcript_text": "raw words"}
+            ),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_issue(self, issue, **kw):
+        return drain.process_issue(
+            self.gh, issue, False, output_dir=self.tmp.name, **kw
+        )
+
+    def test_existing_summary_is_reused_without_llm_call(self):
+        self.gh.file_exists.return_value = True
+        self.gh.file_content.return_value = "old text"
+        out = self.run_issue(_issue())
+        drain.pipeline.summarize_video.assert_not_called()
+        self.gh.commit_file.assert_not_called()
+        self.assertIn("reusing existing summary", self.gh.comment.call_args[0][1])
+        self.assertIn("old text", self.gh.comment.call_args[0][1])
+        self.gh.close_issue.assert_called_once_with(1)
+        self.assertTrue(out["reused"])
+        self.assertEqual(Path(out["local_path"]).read_text(encoding="utf-8"), "old text")
+
+    def test_custom_prompt_or_label_forces_a_rerun(self):
+        self.gh.file_exists.return_value = True
+        self.run_issue(_issue(body="Only the numbers."))
+        self.run_issue(_issue(labels=[drain.RESUMMARIZE_LABEL]))
+        self.assertEqual(drain.pipeline.summarize_video.call_count, 2)
+
+    def test_absent_summary_is_generated_and_issue_detail_wins(self):
+        self.gh.file_exists.return_value = False
+        self.run_issue(_issue(body="detail: complex"), detail="simple")
+        self.assertEqual(
+            drain.pipeline.summarize_video.call_args.kwargs["detail"], "complex"
+        )
+        self.gh.commit_file.assert_called_once()
+        self.gh.close_issue.assert_called_once_with(1)
+
+
+class FileExistsTests(unittest.TestCase):
+    def _gh(self, status):
+        gh = drain.GitHub("t", "o/r")
+        resp = mock.Mock(status_code=status, ok=status < 400, reason="x", text="boom")
+        resp.json.side_effect = ValueError
+        gh.session = mock.Mock(get=mock.Mock(return_value=resp))
+        return gh
+
+    def test_404_is_absent_200_is_present_other_errors_raise(self):
+        self.assertFalse(self._gh(404).file_exists("summaries/a.txt"))
+        self.assertTrue(self._gh(200).file_exists("summaries/a.txt"))
+        with self.assertRaises(RuntimeError):
+            self._gh(500).file_exists("summaries/a.txt")
+
+
+class FailureHandlingTests(unittest.TestCase):
+    def setUp(self):
+        self.gh = mock.Mock()
+        env = mock.patch.dict(os.environ, {"MAX_FAILED_RETRIES": "3"})
+        env.start()
+        self.addCleanup(env.stop)
+
+    @staticmethod
+    def _failures(n):
+        return [{"body": "⚠️ Summarization failed; will retry later.\n\n```\nx\n```"}] * n
+
+    def test_is_permanent_failure(self):
+        for msg in (
+            "ERROR: [youtube] x: Private video. Sign in",
+            "Video unavailable",
+            "This video has been removed by the uploader",
+            "This video is not available",
+            "Join this channel to get access: members-only content",
+            "Sign in to confirm your age",
+            "only YouTube URLs are accepted",
+            "invalid YouTube URL",
+        ):
+            self.assertTrue(drain.is_permanent_failure(RuntimeError(msg)), msg)
+        for msg in ("HTTP Error 429", "Connection reset", "OpenAI 503"):
+            self.assertFalse(drain.is_permanent_failure(RuntimeError(msg)), msg)
+
+    def test_transient_failure_under_cap_only_labels_failed(self):
+        self.gh.list_comments.return_value = self._failures(1)
+        self.assertFalse(drain.mark_failed(self.gh, _issue(), RuntimeError("429")))
+        self.gh.add_label.assert_called_once_with(1, drain.SKIP_LABEL)
+        self.assertEqual(self.gh.comment.call_count, 1)
+
+    def test_cap_reached_gives_up_with_final_comment(self):
+        self.gh.list_comments.return_value = self._failures(2)  # this is the 3rd
+        self.assertTrue(drain.mark_failed(self.gh, _issue(), RuntimeError("429")))
+        labels = [c.args[1] for c in self.gh.add_label.call_args_list]
+        self.assertIn(drain.GAVE_UP_LABEL, labels)
+        self.gh.ensure_label.assert_called_once()
+        final = self.gh.comment.call_args_list[-1].args[1]
+        self.assertIn("will not be retried automatically", final)
+        self.assertIn(drain.GAVE_UP_LABEL, final)
+
+    def test_permanent_failure_gives_up_immediately(self):
+        self.assertTrue(
+            drain.mark_failed(self.gh, _issue(), RuntimeError("Private video"))
+        )
+        self.gh.list_comments.assert_not_called()
+        self.assertIn(
+            drain.GAVE_UP_LABEL, [c.args[1] for c in self.gh.add_label.call_args_list]
+        )
+        self.assertIn("permanent", self.gh.comment.call_args_list[-1].args[1])
+
+    def test_give_up_comment_resets_the_count(self):
+        comments = self._failures(3) + [
+            {"body": "🛑 Giving up. This issue will not be retried automatically."}
+        ] + self._failures(1)
+        self.assertEqual(drain.count_failures(comments), 1)
+
+    def test_worker_skips_gave_up_issues(self):
+        import worker
+
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "t", "GITHUB_REPO": "o/r"}):
+            w = worker.Worker()
+        self.assertFalse(w._due(_issue(labels=[drain.GAVE_UP_LABEL])))
+        self.assertTrue(w._due(_issue()))

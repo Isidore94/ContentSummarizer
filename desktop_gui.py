@@ -329,8 +329,17 @@ class ContentSummarizerApp:
             row=2, column=0, sticky="nw", padx=(0, 10), pady=(8, 0)
         )
         self.prompt_text = tk.Text(add_box, height=2, wrap="word", font=("Segoe UI", 9))
-        self.prompt_text.grid(row=2, column=1, columnspan=2, sticky="ew", pady=(8, 0))
+        self.prompt_text.grid(row=2, column=1, sticky="ew", pady=(8, 0))
         self.prompt_text.bind("<Control-Return>", lambda _e: (self.queue_video(), "break")[1])
+        # Per-video detail override; "Use default" leaves the global style alone.
+        self.video_detail_var = tk.StringVar(value="Use default")
+        ttk.Combobox(
+            add_box,
+            textvariable=self.video_detail_var,
+            values=("Use default", *DETAIL_LEVELS),
+            state="readonly",
+            width=12,
+        ).grid(row=2, column=2, sticky="ne", padx=(8, 0), pady=(8, 0))
         ttk.Label(
             add_box,
             text=(
@@ -724,10 +733,13 @@ class ContentSummarizerApp:
         mode = pipeline.normalize_output_mode(self.mode_var.get())
         self._flash("Queueing…")
 
+        detail = self.video_detail_var.get()
+        detail = detail if detail in DETAIL_LEVELS else None
+
         def create():
             try:
                 issue = self.worker.gh.create_issue(
-                    url, body=drain.build_issue_body(prompt, mode)
+                    url, body=drain.build_issue_body(prompt, mode, detail=detail)
                 )
             except Exception as exc:
                 if not self.closing:
@@ -917,11 +929,13 @@ class ContentSummarizerApp:
             return
         for issue in issues:
             labels = {label["name"] for label in issue.get("labels", [])}
-            failed = drain.SKIP_LABEL in labels
+            gave_up = drain.GAVE_UP_LABEL in labels
+            failed = gave_up or drain.SKIP_LABEL in labels
+            status = "Gave up" if gave_up else ("Failed" if failed else "Waiting")
             item = self.queue_tree.insert(
                 "",
                 "end",
-                values=(issue["number"], "Failed" if failed else "Waiting", issue["title"]),
+                values=(issue["number"], status, issue["title"]),
                 tags=("failed",) if failed else (),
             )
             self.queue_links[item] = issue.get("html_url", "")

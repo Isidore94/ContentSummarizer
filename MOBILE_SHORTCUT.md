@@ -52,6 +52,30 @@ blank for normal)"*) action before **Get Contents of URL** and use its result as
 `body`. A blank answer gives the normal summary. The same box exists in the
 desktop window and the web GUI.
 
+### Optional: pick the detail level per video
+
+Start the `body` with a `detail:` line (`simple`, `detailed` or `complex`;
+`level:` also works) on its own line, before any prompt:
+
+```json
+{
+  "title": "https://www.youtube.com/watch?v=VIDEO_ID",
+  "body": "detail: complex\nFocus on the numbers."
+}
+```
+
+The prompt after it is optional. Without a `detail:` line the drainer's
+default level applies. To choose each time, add a **Choose from Menu** action
+(prompt *"Detail?"*) with four items — **Default**, **Simple**, **Detailed**,
+**Complex** — and under each item a **Text** action: empty for Default,
+otherwise `detail: simple` / `detail: detailed` / `detail: complex`. Then add
+an **Ask for Input** (the optional prompt) and a final **Text** action that
+joins the menu result, a new line, and the prompt; use that as `body`. An
+unknown level is ignored (logged), not an error.
+
+A `detail:` line also forces a fresh summary even if that video was already
+summarized (otherwise an existing summary is reused).
+
 ### Optional: the transcript instead of a summary
 
 Put this marker line in the `body` to skip the AI entirely and get the raw
@@ -68,10 +92,11 @@ The transcript comes back as a comment on the issue (truncated if the video is
 long) and is saved in full on the machine that ran the job. A body without the
 marker summarizes as usual, so nothing about the Shortcut above needs to change.
 
-> **Token:** use the same fine-grained PAT as the drainer (scoped to this repo,
-> **Issues: Read and write**). Creating issues only needs the Issues write
-> permission. Keep the token in the Shortcut only — don't share the Shortcut
-> with the token embedded.
+> **Token:** create a **separate** fine-grained PAT for the phone, scoped to
+> this repo with only **Issues: Read and write**. The drainer's token also has
+> Contents write (it commits summaries); a phone is the device most likely to
+> be lost, so it shouldn't carry that. Keep the token in the Shortcut only —
+> don't share the Shortcut with the token embedded.
 
 ## Building the Shortcut
 

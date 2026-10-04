@@ -420,6 +420,33 @@ def _summary_title(text):
     return None
 
 
+_META_PREFIXES = ("Channel:", "Duration:", "Uploaded:")
+
+
+def _summary_meta(text):
+    """Return the `Channel: … | Duration: … | Uploaded: …` line, or None.
+
+    Looks only at the first few non-empty lines (the header) so older files
+    without the line, and body text that happens to start that way, are safe.
+    """
+    seen = 0
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if seen > 0 and line.startswith(_META_PREFIXES):
+            return line
+        seen += 1
+        if seen >= 4:
+            break
+    return None
+
+
+def _meta_html(text):
+    meta = _summary_meta(text)
+    return f'<div class="muted">{html.escape(meta)}</div>' if meta else ""
+
+
 def _body_without_title(text, title):
     """The summary minus its own first-line title, which the page shows as a heading.
 
@@ -494,7 +521,13 @@ def home(cs_refresh: str = Cookie(default="0")):
     for issue in issues:
         labels = {l["name"] for l in issue.get("labels", [])}
         failed = drain.SKIP_LABEL in labels
-        badge = ' <span class="badge fail">failed</span>' if failed else ""
+        gave_up = drain.GAVE_UP_LABEL in labels
+        failed = failed or gave_up
+        badge = (
+            ' <span class="badge off">gave up</span>'
+            if gave_up
+            else (' <span class="badge fail">failed</span>' if failed else "")
+        )
         retry = (
             f'<form class="inline" method="post" action="/retry/{issue["number"]}">'
             "<button>Retry now</button></form>"
@@ -517,14 +550,17 @@ def home(cs_refresh: str = Cookie(default="0")):
     items = []
     for path in _summary_files()[:20]:
         stem = os.path.splitext(os.path.basename(path))[0]
+        meta = ""
         try:
-            title = _summary_title(open(path, encoding="utf-8").read()) or stem
-        except OSError:
+            text = open(path, encoding="utf-8").read()
+            title = _summary_title(text) or stem
+            meta = _meta_html(text)
+        except (OSError, UnicodeDecodeError):
             title = stem
         date = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(path)))
         items.append(
             f'<li><a href="/s/{stem}">{html.escape(title)}</a>'
-            f'<span class="when">{date}</span></li>'
+            f'<span class="when">{date}</span>{meta}</li>'
         )
     summaries_html = (
         '<ul class="list">' + "".join(items) + "</ul>"
@@ -647,7 +683,13 @@ def home(cs_refresh: str = Cookie(default="0")):
       no API cost, just every word that was said.</p>
     <textarea name="prompt" rows="3" placeholder="Optional: tell the AI how to summarize this one — e.g. &quot;focus on the investing advice and list every ticker mentioned&quot;"></textarea>
     <p class="muted field-hint">Leave the prompt empty for the normal summary.
-      It is ignored for a transcript-only job.</p>
+      It is ignored for a transcript-only job.
+      Detail: <select name="detail">
+        <option value="default" selected>default</option>
+        <option value="simple">simple</option>
+        <option value="detailed">detailed</option>
+        <option value="complex">complex</option>
+      </select> (summary only).</p>
     <button>Queue it</button>
   </form>
 </div>
@@ -715,7 +757,7 @@ def summary_page(stem: str):
     return _page(
         title,
         f'<p class="backlink"><a href="/">&larr; Back</a>{source}</p>'
-        f'<article class="prose">{body}</article>',
+        f'{_meta_html(text)}<article class="prose">{body}</article>',
     )
 
 
@@ -777,13 +819,14 @@ def search(q: str = ""):
                 continue
             seen.add((stem, kind))
             line = next((l for l in text.splitlines() if needle in l.lower()), "")
-            results.append((kind, stem, _summary_title(text) or stem, line))
+            results.append((kind, stem, _summary_title(text) or stem, line, _meta_html(text)))
 
     items = "".join(
         f'<li><a href="/{kind}/{stem}">{html.escape(title)}</a>'
         + ('<span class="badge raw">transcript</span>' if kind == "t" else "")
+        + meta
         + f'<p class="snippet">{html.escape(line[:180])}</p></li>'
-        for kind, stem, title, line in results
+        for kind, stem, title, line, meta in results
     )
     if items:
         count = len(results)
@@ -811,7 +854,12 @@ def search(q: str = ""):
 
 
 @app.post("/queue")
-def queue_video(url: str = Form(...), prompt: str = Form(""), mode: str = Form("summary")):
+def queue_video(
+    url: str = Form(...),
+    prompt: str = Form(""),
+    mode: str = Form("summary"),
+    detail: str = Form("default"),
+):
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         return HTMLResponse(
@@ -828,7 +876,11 @@ def queue_video(url: str = Form(...), prompt: str = Form(""), mode: str = Form("
     except pipeline.PipelineError:
         mode = "summary"  # a tampered form field is not a reason to lose the video
     prompt = pipeline.normalize_custom_prompt(prompt)
-    worker.gh.create_issue(url, body=drain.build_issue_body(prompt, mode))
+    detail = (detail or "").strip().lower()
+    detail = detail if detail in drain.DETAIL_LEVELS else None
+    worker.gh.create_issue(
+        url, body=drain.build_issue_body(prompt, detail=detail, mode=mode)
+    )
     worker.request_drain()
     return RedirectResponse("/", status_code=303)
 
@@ -869,10 +921,11 @@ def set_refresh(seconds: str = Form("0")):
 
 @app.post("/retry/{number}")
 def retry(number: int):
-    try:
-        worker.gh.remove_label(number, drain.SKIP_LABEL)
-    except Exception:
-        log.exception("could not remove label from #%s", number)
+    for name in (drain.SKIP_LABEL, drain.GAVE_UP_LABEL):
+        try:
+            worker.gh.remove_label(number, name)
+        except Exception:
+            log.exception("could not remove label %s from #%s", name, number)
     worker.request_drain()
     return RedirectResponse("/", status_code=303)
 
