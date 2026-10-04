@@ -91,12 +91,6 @@ class GitHubErrorTests(unittest.TestCase):
         detail = drain.response_error(self._Resp("boom " * 500))
         self.assertLessEqual(len(detail), 300)
 
-    def test_gui_labels_never_grow_unbounded(self):
-        import desktop_gui
-
-        self.assertLessEqual(len(desktop_gui._one_line(self.UNICORN)), 160)
-        self.assertNotIn("\n", desktop_gui._one_line(self.UNICORN))
-
 
 class SummaryConfigurationTests(unittest.TestCase):
     def test_detail_levels_are_distinct(self):

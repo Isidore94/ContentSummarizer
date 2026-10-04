@@ -30,11 +30,11 @@ commits a copy to `summaries/`, posts it as a closing comment, and closes the is
 - Requirements layers: `requirements.txt` (full desktop) / `-cloud` (slim, no GPU stack) / `-mini-pc` (exact pins for the exe build) / `-build` (adds pyinstaller).
 
 ## Commands
-- Test: `python -m unittest tests.test_app` from the repo root (22 tests; needs tkinter, so run on the desktop, not headless Linux).
+- Test: `python -m unittest discover -s tests -v` from the repo root. The core suite (`tests/test_app.py`) runs headless (no tkinter); `tests/test_gui.py` needs tkinter and skips itself when it is absent. CI runs the same command via `.github/workflows/test.yml`.
 - Drain once: `python drain.py` (venv activated, `.env` filled).
 - Worker + dashboard: `python serve.py` → `http://<pc>:8787`.
 - Build the exe: `build_exe.ps1` → `dist/`; deploy per `EXE_SETUP.md`.
-- No CI test gate: the only workflow is the (inactive) queue drainer.
+- CI test gate: `.github/workflows/test.yml` runs the headless suite on push/PR; `summarize.yml` is the (inactive) queue drainer.
 
 ## Where to read more
 - `README.md` — the full operating guide: all five run modes, `.env` reference, fine-grained PAT scopes, Task Scheduler setup. Read first.
