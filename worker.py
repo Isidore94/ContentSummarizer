@@ -4,7 +4,8 @@ Polls the GitHub Issues queue every POLL_INTERVAL_SECONDS and processes videos
 as they arrive, instead of waiting for the daily Task Scheduler run. Failures
 get the `summarize-failed` label and are skipped until RETRY_FAILED_HOURS have
 passed (or until the label is removed, e.g. with the dashboard's Retry
-button).
+button). After MAX_FAILED_RETRIES failures, or at once for permanent errors,
+the issue gets `summarize-gave-up` and is left alone until that label is removed.
 
 Run standalone with `python worker.py`, or let dashboard.py host it alongside
 the web UI.
@@ -112,6 +113,8 @@ class Worker:
 
     def _due(self, issue):
         labels = {l["name"] for l in issue.get("labels", [])}
+        if drain.GAVE_UP_LABEL in labels:
+            return False  # terminal until a human removes the label
         if drain.SKIP_LABEL not in labels:
             return True
         age_hours = (
@@ -151,12 +154,7 @@ class Worker:
                 failed += 1
                 log.exception("issue #%s failed", issue["number"])
                 try:
-                    self.gh.comment(
-                        issue["number"],
-                        "⚠️ Summarization failed; will retry later.\n\n"
-                        f"```\n{drain.failure_message(exc)}\n```",
-                    )
-                    self.gh.add_label(issue["number"], drain.SKIP_LABEL)
+                    drain.mark_failed(self.gh, issue, exc)
                 except Exception:
                     log.exception("could not mark #%s as failed", issue["number"])
         if ok:
