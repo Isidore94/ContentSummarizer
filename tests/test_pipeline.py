@@ -298,5 +298,54 @@ class SummarizeVideoHeaderTests(unittest.TestCase):
         self.assertEqual(result["text"], f"T\n{CANON}\n\nBODY\n")
 
 
+class YtDlpHintTests(unittest.TestCase):
+    def _fail(self, stderr):
+        err = subprocess.CalledProcessError(1, ["yt-dlp"], stderr=stderr)
+        with mock.patch.object(pipeline.subprocess, "run", side_effect=err):
+            with self.assertRaises(pipeline.PipelineError) as ctx:
+                pipeline._run_yt_dlp(["x"])
+        return str(ctx.exception)
+
+    def test_hint_for_403_and_nsig(self):
+        for stderr in ("ERROR: HTTP Error 403: Forbidden", "WARNING: nsig extraction failed"):
+            with self.subTest(stderr=stderr):
+                msg = self._fail(stderr)
+                self.assertTrue(msg.startswith("yt-dlp failed (1): " + stderr))
+                self.assertIn("pip install -U yt-dlp", msg)
+                self.assertIn("may be out of date", msg)
+
+    def test_no_hint_for_private_video(self):
+        msg = self._fail("ERROR: Private video. Sign in if you've been granted access")
+        self.assertNotIn("pip install", msg)
+        self.assertEqual(
+            msg,
+            "yt-dlp failed (1): ERROR: Private video. Sign in if you've been granted access",
+        )
+
+    def test_frozen_hint_mentions_rebuild(self):
+        def fake_main(args):
+            import sys as _sys
+            _sys.stderr.write("Unable to extract uploader id")
+            raise SystemExit(1)
+
+        fake = mock.MagicMock()
+        fake.main = fake_main
+        with mock.patch.object(pipeline.sys, "frozen", True, create=True), \
+                mock.patch.dict("sys.modules", {"yt_dlp": fake}):
+            with self.assertRaises(pipeline.PipelineError) as ctx:
+                pipeline._run_yt_dlp(["x"])
+        self.assertIn("build_exe.ps1", str(ctx.exception))
+
+    def test_version_none_when_missing(self):
+        with mock.patch.dict("sys.modules", {"yt_dlp": None, "yt_dlp.version": None}):
+            self.assertIsNone(pipeline.yt_dlp_version())
+
+    def test_version_returned(self):
+        fake = mock.MagicMock()
+        fake.version.__version__ = "2099.01.01"
+        with mock.patch.dict("sys.modules", {"yt_dlp": fake, "yt_dlp.version": fake.version}):
+            self.assertEqual(pipeline.yt_dlp_version(), "2099.01.01")
+
+
 if __name__ == "__main__":
     unittest.main()

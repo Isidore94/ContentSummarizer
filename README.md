@@ -235,7 +235,15 @@ any always-on box (e.g. a mini PC) — no GPU needed:
   mode (Auto / OpenAI API / GPU PC).
 - **Failure handling**: failed videos get the `summarize-failed` label and are
   retried after `RETRY_FAILED_HOURS` (default 24), or immediately via the
-  dashboard's Retry button. A manual `python drain.py` retries everything.
+  dashboard's Retry button. A manual `python drain.py` retries everything
+  that isn't given up on. After `MAX_FAILED_RETRIES` failures (default 3), or
+  at once for permanent errors (private, removed, members-only or age-gated
+  video; non-YouTube URL), the issue gets the `summarize-gave-up` label and a
+  final comment; `python drain.py` and the worker both skip it until you
+  remove that label, which re-queues it with a fresh retry count.
+- **yt-dlp upkeep**: YouTube breaks yt-dlp extractors every few weeks. The
+  non-exe worker can run `pip install -U yt-dlp` between videos every
+  `YT_DLP_AUTO_UPDATE_HOURS` (blank/0 = off).
 
 See **[SETUP_MINI_PC.md](SETUP_MINI_PC.md)** for the full setup (and remember
 to disable the desktop's scheduled task once the always-on worker takes over —
@@ -245,6 +253,23 @@ one drainer at a time).
 
 See **[MOBILE_SHORTCUT.md](MOBILE_SHORTCUT.md)** for the iOS Shortcut recipe:
 Share Sheet → POST to the GitHub create-issue API with the URL as the title.
+The issue body can start with `detail: simple|detailed|complex` (or `level:`)
+on its own line to pick that video's level, optionally followed by a custom
+prompt.
+
+## Queue behaviour
+
+- **URLs**: any YouTube form works (`youtu.be`, `/shorts/`, `/live/`, `m.`,
+  `music.`, links with `&list=` or `&si=`) and is canonicalized to
+  `https://www.youtube.com/watch?v=<id>`. Channel/playlist-only links are
+  rejected.
+- **Output**: the summary header has a third line,
+  `Channel: … | Duration: … | Uploaded: YYYY-MM-DD`. Caption transcripts carry
+  sparse `[m:ss]` markers so the notes can cite timestamps.
+- **Dedupe**: if `summaries/<title>--<id>.txt` already exists in the repo, the
+  existing text is posted and the issue closed with no new LLM call — unless
+  the issue has a custom prompt, an explicit `detail:` line, or the
+  `resummarize` label.
 
 ## Notes
 
@@ -252,4 +277,7 @@ Share Sheet → POST to the GitHub create-issue API with the URL as the title.
   (rather than PyGithub) — the calls are few and explicit (list issues, commit
   via the Contents API, comment, close), and it keeps the dependency surface
   small.
+- **Tests:** `python -m unittest tests.test_app` locally (needs tkinter). CI
+  (`.github/workflows/test.yml`) runs `python -m unittest discover -s tests` on
+  every push and pull request.
 - Owner/repo is read from `GITHUB_REPO` in `.env`, not hardcoded.

@@ -192,6 +192,33 @@ def _summary_title(text):
     return None
 
 
+_META_PREFIXES = ("Channel:", "Duration:", "Uploaded:")
+
+
+def _summary_meta(text):
+    """Return the `Channel: … | Duration: … | Uploaded: …` line, or None.
+
+    Looks only at the first few non-empty lines (the header) so older files
+    without the line, and body text that happens to start that way, are safe.
+    """
+    seen = 0
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if seen > 0 and line.startswith(_META_PREFIXES):
+            return line
+        seen += 1
+        if seen >= 4:
+            break
+    return None
+
+
+def _meta_html(text):
+    meta = _summary_meta(text)
+    return f'<div class="muted">{html.escape(meta)}</div>' if meta else ""
+
+
 def _summary_files():
     files = glob.glob(os.path.join(_summary_dir(), "*.txt"))
     files.extend(glob.glob(os.path.join(_summary_dir(), "*.md")))
@@ -216,7 +243,13 @@ def home():
     for issue in issues:
         labels = {l["name"] for l in issue.get("labels", [])}
         failed = drain.SKIP_LABEL in labels
-        badge = ' <span class="badge fail">failed</span>' if failed else ""
+        gave_up = drain.GAVE_UP_LABEL in labels
+        failed = failed or gave_up
+        badge = (
+            ' <span class="badge off">gave up</span>'
+            if gave_up
+            else (' <span class="badge fail">failed</span>' if failed else "")
+        )
         retry = (
             f'<form class="inline" method="post" action="/retry/{issue["number"]}">'
             "<button>Retry now</button></form>"
@@ -238,14 +271,17 @@ def home():
     items = []
     for path in _summary_files()[:20]:
         stem = os.path.splitext(os.path.basename(path))[0]
+        meta = ""
         try:
-            title = _summary_title(open(path, encoding="utf-8").read()) or stem
-        except OSError:
+            text = open(path, encoding="utf-8").read()
+            title = _summary_title(text) or stem
+            meta = _meta_html(text)
+        except (OSError, UnicodeDecodeError):
             title = stem
         date = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(path)))
         items.append(
             f'<li><a href="/s/{stem}">{html.escape(title)}</a> '
-            f'<span class="muted">{date}</span></li>'
+            f'<span class="muted">{date}</span>{meta}</li>'
         )
     summaries_html = (
         "<ul>" + "".join(items) + "</ul>"
@@ -315,7 +351,13 @@ def home():
   <form method="post" action="/queue">
     <input type="text" name="url" placeholder="https://www.youtube.com/watch?v=..." required>
     <textarea name="prompt" rows="3" placeholder="Optional: tell the AI how to summarize this one — e.g. &quot;focus on the investing advice and list every ticker mentioned&quot;"></textarea>
-    <p class="muted field-hint">Leave the prompt empty for the normal summary.</p>
+    <p class="muted field-hint">Leave the prompt empty for the normal summary.
+      Detail: <select name="detail">
+        <option value="default" selected>default</option>
+        <option value="simple">simple</option>
+        <option value="detailed">detailed</option>
+        <option value="complex">complex</option>
+      </select></p>
     <button>Queue it</button>
   </form>
 </div>
@@ -356,7 +398,7 @@ def summary_page(stem: str):
         body = md.markdown(html.escape(text), extensions=["extra"])
     return _page(
         _summary_title(text) or stem,
-        f'<p><a href="/">← back</a></p><article class="prose">{body}</article>',
+        f'<p><a href="/">← back</a></p>{_meta_html(text)}<article class="prose">{body}</article>',
     )
 
 
@@ -376,12 +418,12 @@ def search(q: str = ""):
                 line = next(
                     (l for l in text.splitlines() if needle in l.lower()), ""
                 )
-                results.append((stem, _summary_title(text) or stem, line))
+                results.append((stem, _summary_title(text) or stem, line, _meta_html(text)))
 
     items = "".join(
-        f'<li><a href="/s/{stem}">{html.escape(title)}</a>'
+        f'<li><a href="/s/{stem}">{html.escape(title)}</a>{meta}'
         f'<div class="muted">{html.escape(line[:180])}</div></li>'
-        for stem, title, line in results
+        for stem, title, line, meta in results
     )
     hits = (
         f"<ul>{items}</ul>"
@@ -402,7 +444,9 @@ def search(q: str = ""):
 
 
 @app.post("/queue")
-def queue_video(url: str = Form(...), prompt: str = Form("")):
+def queue_video(
+    url: str = Form(...), prompt: str = Form(""), detail: str = Form("default")
+):
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         return HTMLResponse(
@@ -414,7 +458,9 @@ def queue_video(url: str = Form(...), prompt: str = Form("")):
             status_code=400,
         )
     prompt = pipeline.normalize_custom_prompt(prompt)
-    worker.gh.create_issue(url, body=drain.build_issue_body(prompt))
+    detail = (detail or "").strip().lower()
+    detail = detail if detail in drain.DETAIL_LEVELS else None
+    worker.gh.create_issue(url, body=drain.build_issue_body(prompt, detail))
     worker.request_drain()
     return RedirectResponse("/", status_code=303)
 
@@ -439,10 +485,11 @@ def set_transcribe_mode(mode: str = Form(...)):
 
 @app.post("/retry/{number}")
 def retry(number: int):
-    try:
-        worker.gh.remove_label(number, drain.SKIP_LABEL)
-    except Exception:
-        log.exception("could not remove label from #%s", number)
+    for name in (drain.SKIP_LABEL, drain.GAVE_UP_LABEL):
+        try:
+            worker.gh.remove_label(number, name)
+        except Exception:
+            log.exception("could not remove label %s from #%s", name, number)
     worker.request_drain()
     return RedirectResponse("/", status_code=303)
 

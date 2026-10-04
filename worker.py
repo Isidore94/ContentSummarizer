@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -23,12 +24,14 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 import drain
+import pipeline
 from app_config import normalize_detail
 
 log = logging.getLogger("worker")
 
 POLL_INTERVAL_DEFAULT = 120
 RETRY_FAILED_HOURS_DEFAULT = 24
+YT_DLP_UPDATE_TIMEOUT = 300
 
 
 def _updated_at(issue):
@@ -52,6 +55,14 @@ class Worker:
             "true",
             "yes",
         }
+        try:
+            self.yt_dlp_update_hours = float(
+                os.environ.get("YT_DLP_AUTO_UPDATE_HOURS") or 0
+            )
+        except ValueError:
+            self.yt_dlp_update_hours = 0.0
+        self._yt_dlp_checked_at = None  # monotonic-ish time of last attempt
+        self._frozen_warned = False
         self.gh = drain.GitHub(os.environ["GITHUB_TOKEN"], os.environ["GITHUB_REPO"])
         self.wake = threading.Event()
         self._stop = threading.Event()
@@ -73,6 +84,7 @@ class Worker:
             "listening": enabled,
             "summary_detail": self.summary_detail,
             "output_dir": self.output_dir or "",
+            "last_yt_dlp_update": None,
         }
 
     def snapshot(self):
@@ -122,6 +134,52 @@ class Worker:
         ).total_seconds() / 3600
         return age_hours >= self.retry_hours
 
+    def maybe_update_yt_dlp(self):
+        """Upgrade yt-dlp via pip when enabled and due. Never raises.
+
+        Opt-in through YT_DLP_AUTO_UPDATE_HOURS (> 0); unavailable in the
+        frozen exe, where yt-dlp is bundled. Returns True if pip ran and
+        succeeded.
+        """
+        hours = self.yt_dlp_update_hours
+        if hours <= 0:
+            return False
+        if getattr(sys, "frozen", False):
+            if not self._frozen_warned:
+                self._frozen_warned = True
+                log.info(
+                    "YT_DLP_AUTO_UPDATE_HOURS is set but yt-dlp auto-update is "
+                    "unavailable in the exe; rebuild it with build_exe.ps1"
+                )
+            return False
+        now = time.time()
+        if (
+            self._yt_dlp_checked_at is not None
+            and now - self._yt_dlp_checked_at < hours * 3600
+        ):
+            return False
+        self._yt_dlp_checked_at = now
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-U", "--quiet", "yt-dlp"],
+                capture_output=True,
+                text=True,
+                timeout=YT_DLP_UPDATE_TIMEOUT,
+            )
+        except Exception as exc:
+            log.warning("yt-dlp auto-update failed: %s", exc)
+            return False
+        if proc.returncode != 0:
+            log.warning(
+                "yt-dlp auto-update failed (%s): %s",
+                proc.returncode,
+                (proc.stderr or proc.stdout or "").strip(),
+            )
+            return False
+        self._set(last_yt_dlp_update=now)
+        log.info("yt-dlp auto-update ok; version %s", pipeline.yt_dlp_version())
+        return True
+
     def run_once(self):
         """Drain everything currently due. Returns (ok, failed)."""
         if not self._label_ready:
@@ -167,6 +225,8 @@ class Worker:
             self.poll_seconds,
             self.retry_hours,
         )
+        if self.yt_dlp_update_hours > 0 and getattr(sys, "frozen", False):
+            self.maybe_update_yt_dlp()  # logs the unavailable notice once
         while not self._stop.is_set():
             if not self._enabled.is_set():
                 self._set(state="paused", listening=False)
@@ -174,6 +234,10 @@ class Worker:
                 self.wake.clear()
                 continue
             self._set(state="draining")
+            try:
+                self.maybe_update_yt_dlp()
+            except Exception:
+                log.exception("yt-dlp auto-update check failed")
             try:
                 ok, failed = self.run_once()
                 result = f"{ok} ok, {failed} failed" if ok or failed else "queue empty"

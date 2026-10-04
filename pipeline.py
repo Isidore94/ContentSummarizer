@@ -146,8 +146,55 @@ def validate_youtube_url(url):
     return canonical_youtube_url(value)
 
 
+_YT_DLP_BREAKAGE_SIGNATURES = (
+    "sign in to confirm you're not a bot",
+    "unable to extract",
+    "nsig extraction failed",
+    "requested format is not available",
+    "http error 403",
+    "please report this issue",
+    "this video is only available",
+    "n challenge",
+)
+_yt_dlp_version_logged = False
+
+
+def yt_dlp_version():
+    """Return the installed yt-dlp version string, or None if unavailable."""
+    try:
+        import yt_dlp.version
+
+        return yt_dlp.version.__version__
+    except Exception:
+        return None
+
+
+def _log_yt_dlp_version_once():
+    global _yt_dlp_version_logged
+    if _yt_dlp_version_logged:
+        return
+    _yt_dlp_version_logged = True
+    log.info("yt-dlp version: %s", yt_dlp_version() or "unknown")
+
+
+def _yt_dlp_failure_message(base, stderr):
+    """Append an update hint when stderr looks like an extractor breakage."""
+    lowered = (stderr or "").lower()
+    if not any(sig in lowered for sig in _YT_DLP_BREAKAGE_SIGNATURES):
+        return base
+    if getattr(sys, "frozen", False):
+        hint = (
+            "yt-dlp is bundled in this exe; rebuild it with build_exe.ps1 "
+            "after `pip install -U yt-dlp`"
+        )
+    else:
+        hint = "yt-dlp may be out of date: run `python -m pip install -U yt-dlp`"
+    return f"{base}\n{hint}"
+
+
 def _run_yt_dlp(args, *, timeout=YT_DLP_AUDIO_TIMEOUT):
     """Run yt-dlp with the given args, returning the CompletedProcess."""
+    _log_yt_dlp_version_once()
     args = [
         "--socket-timeout",
         "30",
@@ -184,7 +231,10 @@ def _run_yt_dlp(args, *, timeout=YT_DLP_AUDIO_TIMEOUT):
         )
         if returncode:
             raise PipelineError(
-                f"yt-dlp failed ({returncode}): {result.stderr.strip()}"
+                _yt_dlp_failure_message(
+                    f"yt-dlp failed ({returncode}): {result.stderr.strip()}",
+                    result.stderr,
+                )
             )
         return result
 
@@ -207,7 +257,10 @@ def _run_yt_dlp(args, *, timeout=YT_DLP_AUDIO_TIMEOUT):
         ) from exc
     except subprocess.CalledProcessError as exc:
         raise PipelineError(
-            f"yt-dlp failed ({exc.returncode}): {exc.stderr.strip()}"
+            _yt_dlp_failure_message(
+                f"yt-dlp failed ({exc.returncode}): {exc.stderr.strip()}",
+                exc.stderr,
+            )
         ) from exc
     except subprocess.TimeoutExpired as exc:
         raise PipelineError(f"yt-dlp timed out after {timeout} seconds") from exc

@@ -210,7 +210,16 @@ class ContentSummarizerApp:
             row=1, column=0, sticky="nw", padx=(0, 10), pady=(8, 0)
         )
         self.prompt_text = tk.Text(add_box, height=3, wrap="word", font=("Segoe UI", 9))
-        self.prompt_text.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(8, 0))
+        self.prompt_text.grid(row=1, column=1, sticky="ew", pady=(8, 0))
+        # Per-video detail override; "Use default" leaves the global style alone.
+        self.video_detail_var = tk.StringVar(value="Use default")
+        ttk.Combobox(
+            add_box,
+            textvariable=self.video_detail_var,
+            values=("Use default", *DETAIL_LEVELS),
+            state="readonly",
+            width=12,
+        ).grid(row=1, column=2, sticky="ne", padx=(8, 0), pady=(8, 0))
         ttk.Label(
             add_box,
             text=(
@@ -405,10 +414,13 @@ class ContentSummarizerApp:
             self.prompt_text.get("1.0", "end").strip()
         )
 
+        detail = self.video_detail_var.get()
+        detail = detail if detail in DETAIL_LEVELS else None
+
         def create():
             try:
                 issue = self.worker.gh.create_issue(
-                    url, body=drain.build_issue_body(prompt)
+                    url, body=drain.build_issue_body(prompt, detail)
                 )
             except Exception as exc:
                 if not self.closing:
@@ -566,7 +578,10 @@ class ContentSummarizerApp:
             return
         for issue in issues:
             labels = {label["name"] for label in issue.get("labels", [])}
-            status = "Failed" if drain.SKIP_LABEL in labels else "Waiting"
+            if drain.GAVE_UP_LABEL in labels:
+                status = "Gave up"
+            else:
+                status = "Failed" if drain.SKIP_LABEL in labels else "Waiting"
             item = self.queue_tree.insert(
                 "",
                 "end",
