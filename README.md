@@ -82,6 +82,7 @@ summaries/          # generated summaries land here
 | `GITHUB_TOKEN`      | yes      | Fine-grained PAT scoped to this repo (see scopes below).           |
 | `GITHUB_REPO`       | yes      | The repo the queue lives in, as `owner/repo`.                      |
 | `OPENAI_API_KEY`    | usually  | Required when `SUMMARY_PROVIDER=openai` (the default).             |
+| `OPENAI_BASE_URL`   | no       | Point the `openai` provider at any OpenAI-compatible server (e.g. Ollama on the GPU box through an ssh tunnel); set `OPENAI_SUMMARY_MODEL` to its model name and any non-empty `OPENAI_API_KEY`. |
 | `ANTHROPIC_API_KEY` | alternate| Required only when `SUMMARY_PROVIDER=anthropic`.                   |
 | `FORCE_WHISPER`     | no       | Set to `1` to always transcribe with Whisper and skip captions.   |
 | `SUMMARY_DETAIL`    | no       | `simple`, `detailed`, or `complex` (GUI choice overrides this).   |
