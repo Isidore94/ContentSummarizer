@@ -615,7 +615,7 @@ class ParakeetFallbackTests(unittest.TestCase):
             "pipeline.summarize", return_value="summary body"
         ):
             result = pipeline.summarize_video(self.URL, detail="simple")
-        transcribe.assert_called_once_with(self.URL)
+        transcribe.assert_called_once_with("https://www.youtube.com/watch?v=6th_YmV0kLQ")  # main canonicalizes urls
         self.assertIn("summary body", result["text"])
 
     def test_parakeet_runs_ssh_with_video_id_and_returns_stdout(self):
