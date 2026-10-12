@@ -43,6 +43,7 @@ class SummaryListTests(unittest.TestCase):
 
     def test_filter_matches_every_word_in_any_order(self):
         import desktop_gui
+        import drain
 
         name = drain.summary_filename("Jordan Peterson on IQ", "abc123")
         self.assertTrue(desktop_gui._matches_filter(name, "peterson iq"))
@@ -53,6 +54,7 @@ class SummaryListTests(unittest.TestCase):
     def test_pretty_title_drops_the_video_id_suffix(self):
         """It must undo exactly what drain.summary_filename() builds."""
         import desktop_gui
+        import drain
 
         name = drain.summary_filename("The Big IQ Controversy", "dQw4w9WgXcQ")
         self.assertEqual(desktop_gui._pretty_title(name), "The big iq controversy")
