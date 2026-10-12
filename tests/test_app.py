@@ -216,5 +216,124 @@ class SafetyTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "2026.test")
 
 
+class ParakeetFallbackTests(unittest.TestCase):
+    URL = "https://youtu.be/6th_YmV0kLQ"
+    RATE_LIMITED = pipeline.PipelineError(
+        "yt-dlp failed (1): ERROR: Unable to download video subtitles for 'en': "
+        "HTTP Error 429: Too Many Requests"
+    )
+
+    @staticmethod
+    def _proc(returncode=0, stdout="", stderr=""):
+        return subprocess.CompletedProcess(["ssh"], returncode, stdout, stderr)
+
+    def test_subtitle_429_is_treated_as_no_captions(self):
+        with mock.patch("pipeline._run_yt_dlp", side_effect=self.RATE_LIMITED):
+            self.assertIsNone(pipeline.fetch_captions(self.URL))
+
+    def test_other_subtitle_errors_still_raise(self):
+        error = pipeline.PipelineError("yt-dlp failed (1): ERROR: Video unavailable")
+        with mock.patch("pipeline._run_yt_dlp", side_effect=error):
+            with self.assertRaisesRegex(pipeline.PipelineError, "Video unavailable"):
+                pipeline.fetch_captions(self.URL)
+
+    def test_summarize_video_reaches_transcribe_on_429(self):
+        with mock.patch(
+            "pipeline.get_metadata",
+            return_value={"id": "6th_YmV0kLQ", "title": "t"},
+        ), mock.patch(
+            "pipeline._run_yt_dlp", side_effect=self.RATE_LIMITED
+        ), mock.patch(
+            "pipeline.transcribe", return_value="hello world"
+        ) as transcribe, mock.patch(
+            "pipeline.summarize", return_value="summary body"
+        ):
+            result = pipeline.summarize_video(self.URL, detail="simple")
+        transcribe.assert_called_once_with(self.URL)
+        self.assertIn("summary body", result["text"])
+
+    def test_parakeet_runs_ssh_with_video_id_and_returns_stdout(self):
+        with mock.patch.dict(os.environ, {"PARAKEET_HOST": "testhost"}), mock.patch(
+            "pipeline.subprocess.run",
+            return_value=self._proc(stdout="  hello\n world "),
+        ) as run:
+            text = pipeline.transcribe_parakeet(
+                "https://www.youtube.com/watch?v=6th_YmV0kLQ&t=5"
+            )
+        self.assertEqual(text, "hello world")
+        self.assertEqual(
+            run.call_args.args[0],
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+             "testhost", "bin/pete-transcribe", "6th_YmV0kLQ"],
+        )
+
+    def test_parakeet_nonzero_exit_raises(self):
+        with mock.patch(
+            "pipeline.subprocess.run",
+            return_value=self._proc(returncode=1, stderr="boom"),
+        ):
+            with self.assertRaisesRegex(
+                pipeline.PipelineError, r"parakeet failed \(1\).*boom"
+            ):
+                pipeline.transcribe_parakeet(self.URL)
+
+    def test_parakeet_empty_transcript_raises(self):
+        with mock.patch(
+            "pipeline.subprocess.run", return_value=self._proc(stdout=" \n ")
+        ):
+            with self.assertRaisesRegex(pipeline.PipelineError, "empty transcript"):
+                pipeline.transcribe_parakeet(self.URL)
+
+    def test_parakeet_timeout_raises(self):
+        with mock.patch(
+            "pipeline.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(["ssh"], 1800),
+        ):
+            with self.assertRaisesRegex(pipeline.PipelineError, "timed out"):
+                pipeline.transcribe_parakeet(self.URL)
+
+    def test_parakeet_rejects_url_without_id(self):
+        with mock.patch("pipeline.subprocess.run") as run:
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.transcribe_parakeet("https://www.youtube.com/watch?v=abc")
+        run.assert_not_called()
+
+    def test_auto_prefers_gpu_node_then_parakeet_then_openai(self):
+        cases = (
+            (True, False, "remote"),
+            (False, True, "parakeet"),
+            (False, False, "openai"),
+        )
+        for gpu_up, parakeet_up, expected in cases:
+            with self.subTest(gpu=gpu_up, parakeet=parakeet_up), mock.patch.dict(
+                os.environ, {"TRANSCRIBE_BACKEND": "auto"}
+            ), mock.patch(
+                "pipeline.gpu_node_online", return_value=gpu_up
+            ), mock.patch.object(
+                pipeline, "parakeet_online", create=True, return_value=parakeet_up
+            ), mock.patch(
+                "pipeline.transcribe_remote", return_value="remote"
+            ), mock.patch.object(
+                pipeline, "transcribe_parakeet", create=True, return_value="parakeet"
+            ), mock.patch(
+                "pipeline.transcribe_openai", return_value="openai"
+            ):
+                self.assertEqual(pipeline.transcribe(self.URL), expected)
+
+    def test_parakeet_backend_selected_explicitly(self):
+        with mock.patch.dict(
+            os.environ, {"TRANSCRIBE_BACKEND": "parakeet"}
+        ), mock.patch.object(
+            pipeline, "transcribe_parakeet", create=True, return_value="hello"
+        ) as parakeet:
+            self.assertEqual(pipeline.transcribe(self.URL), "hello")
+        parakeet.assert_called_once_with(self.URL)
+
+    def test_unknown_backend_message_lists_parakeet(self):
+        with mock.patch.dict(os.environ, {"TRANSCRIBE_BACKEND": "bogus"}):
+            with self.assertRaisesRegex(pipeline.PipelineError, "parakeet"):
+                pipeline.transcribe(self.URL)
+
+
 if __name__ == "__main__":
     unittest.main()
