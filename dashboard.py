@@ -619,7 +619,7 @@ def home(cs_refresh: str = Cookie(default="0")):
         meta_html = f'<p class="muted">summaries via {html.escape(provider)}</p>'
     else:
         seg = []
-        for value, label in (("auto", "Auto"), ("openai", "OpenAI API"), ("remote", "GPU PC")):
+        for value, label in (("auto", "Auto"), ("openai", "OpenAI API"), ("remote", "GPU PC"), ("parakeet", "Parakeet")):
             active = " active" if backend == value else ""
             seg.append(
                 f'<form method="post" action="/settings/transcribe">'
@@ -894,7 +894,7 @@ def drain_now():
 @app.post("/settings/transcribe")
 def set_transcribe_mode(mode: str = Form(...)):
     mode = mode.strip().lower()
-    if mode in {"auto", "openai", "remote"}:
+    if mode in {"auto", "openai", "remote", "parakeet"}:
         # pipeline.transcribe() reads the env on every call, and the worker
         # thread shares this process — so this takes effect immediately.
         # It is not persisted; .env wins again after a restart.
