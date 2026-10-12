@@ -13,6 +13,6 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: pip install -r requirements-cloud.txt fastapi uvicorn markdown
+        run: pip install -r requirements-cloud.txt fastapi uvicorn markdown python-multipart
       - name: Run tests
         run: python -m unittest discover -s tests -v
