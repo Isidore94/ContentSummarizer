@@ -37,10 +37,14 @@ WHISPER_DEVICE = "cuda"
 WHISPER_COMPUTE_TYPE = "float16"
 
 # Transcription fallback backend for caption-less videos:
-#   "auto"   — GPU node (below) when reachable, else the OpenAI audio API
-#   "openai" — OpenAI audio API (no GPU needed)
-#   "local"  — faster-whisper on this machine's CUDA GPU
-#   "remote" — a gpu_node.py instance at GPU_NODE_URL (fail if unreachable)
+#   "auto"     — GPU node (below) when reachable, else parakeet when its ssh
+#                host answers, else the OpenAI audio API
+#   "openai"   — OpenAI audio API (no GPU needed)
+#   "local"    — faster-whisper on this machine's CUDA GPU
+#   "remote"   — a gpu_node.py instance at GPU_NODE_URL (fail if unreachable)
+#   "parakeet" — bin/pete-transcribe over ssh on PARAKEET_HOST (default
+#                claude-host); that host fetches the audio, so it also works
+#                when this IP is rate-limited by YouTube
 TRANSCRIBE_BACKEND_DEFAULT = "auto"
 OPENAI_TRANSCRIBE_MODEL_DEFAULT = "whisper-1"
 
@@ -63,6 +67,7 @@ YT_DLP_METADATA_TIMEOUT = 180
 YT_DLP_SUBTITLE_TIMEOUT = 300
 YT_DLP_AUDIO_TIMEOUT = 3600
 FFMPEG_TIMEOUT = 1800
+PARAKEET_TIMEOUT = 1800
 
 # Cached faster-whisper model. Loading large-v3 onto the GPU is expensive, so we
 # do it once per process even when a batch needs it repeatedly.
@@ -174,21 +179,28 @@ def get_metadata(url):
 def _download_subs(url, workdir, auto):
     """Download subtitles into ``workdir``; return the .vtt path or None."""
     flag = "--write-auto-sub" if auto else "--write-subs"
-    _run_yt_dlp(
-        [
-            "--skip-download",
-            flag,
-            "--sub-format",
-            "vtt",
-            "--sub-langs",
-            "en.*,en",
-            "--no-warnings",
-            "-o",
-            os.path.join(workdir, "%(id)s.%(ext)s"),
-            url,
-        ],
-        timeout=YT_DLP_SUBTITLE_TIMEOUT,
-    )
+    try:
+        _run_yt_dlp(
+            [
+                "--skip-download",
+                flag,
+                "--sub-format",
+                "vtt",
+                "--sub-langs",
+                "en.*,en",
+                "--no-warnings",
+                "-o",
+                os.path.join(workdir, "%(id)s.%(ext)s"),
+                url,
+            ],
+            timeout=YT_DLP_SUBTITLE_TIMEOUT,
+        )
+    except PipelineError as exc:
+        # A rate-limited subtitle endpoint shouldn't block the transcription
+        # fallback, which may fetch from another host.
+        if "429" not in str(exc) and "Too Many Requests" not in str(exc):
+            raise
+        log.warning("subtitles rate-limited (429); treating as no captions")
     vtts = sorted(glob.glob(os.path.join(workdir, "*.vtt")))
     return vtts[0] if vtts else None
 
@@ -418,6 +430,58 @@ def transcribe_remote(url):
     return text
 
 
+_YT_ID_RE = re.compile(
+    r"(?:v=|youtu\.be/|/shorts/|/live/|/embed/)([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])"
+)
+
+
+def _parakeet_host():
+    return os.environ.get("PARAKEET_HOST", "claude-host").strip() or "claude-host"
+
+
+def parakeet_online():
+    """True when the parakeet ssh host answers."""
+    try:
+        return subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", _parakeet_host(), "true"],
+            capture_output=True,
+            timeout=15,
+        ).returncode == 0
+    except Exception:
+        return False
+
+
+def transcribe_parakeet(url):
+    """Transcribe on the parakeet host over ssh; that host fetches the audio."""
+    match = _YT_ID_RE.search(url)
+    if not match:
+        raise PipelineError(f"no YouTube video id in {url!r}")
+    host = _parakeet_host()
+    log.info("transcribing via parakeet on %s", host)
+    # Only the validated id reaches the remote shell, never the raw url.
+    # bin/ is home-relative: non-interactive ssh has no ~/bin on PATH.
+    try:
+        proc = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host,
+             "bin/pete-transcribe", match.group(1)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=PARAKEET_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise PipelineError(f"parakeet timed out after {PARAKEET_TIMEOUT} seconds") from exc
+    except FileNotFoundError as exc:
+        raise PipelineError("ssh not found on PATH (required for the parakeet backend)") from exc
+    if proc.returncode:
+        raise PipelineError(f"parakeet failed ({proc.returncode}): {proc.stderr[:500]}")
+    text = " ".join(proc.stdout.split())
+    if not text:
+        raise PipelineError("parakeet returned an empty transcript")
+    return text
+
+
 def transcribe(url):
     """Transcribe a video's audio using the configured fallback backend."""
     backend = os.environ.get(
@@ -428,8 +492,12 @@ def transcribe(url):
             backend = "remote"
         else:
             if _gpu_node_url():
-                log.info("GPU node offline; using the OpenAI audio API")
-            backend = "openai"
+                log.info("GPU node offline; trying parakeet")
+            if parakeet_online():
+                backend = "parakeet"
+            else:
+                log.info("parakeet host offline; using the OpenAI audio API")
+                backend = "openai"
     if backend == "remote":
         return transcribe_remote(url)
     if backend == "openai":
@@ -437,9 +505,11 @@ def transcribe(url):
         return transcribe_openai(url)
     if backend == "local":
         return transcribe_local(url)
+    if backend == "parakeet":
+        return transcribe_parakeet(url)
     raise PipelineError(
         f"Unknown TRANSCRIBE_BACKEND {backend!r}; "
-        "expected 'auto', 'openai', 'local', or 'remote'"
+        "expected 'auto', 'openai', 'local', 'remote', or 'parakeet'"
     )
 
 

@@ -227,8 +227,11 @@ any always-on box (e.g. a mini PC) — no GPU needed:
   *Drain now*, per-video *Retry*, and browsable/searchable summaries.
 - **Transcription without a GPU**: with `TRANSCRIBE_BACKEND=auto` (the
   default), caption-less videos use the desktop's GPU node (`gpu_node.py`,
-  below) whenever that PC is on, else the OpenAI audio API. `openai`, `local`
-  (CUDA faster-whisper), and `remote` pin a specific backend.
+  below) whenever that PC is on, else `parakeet` (`bin/pete-transcribe` over
+  ssh on `PARAKEET_HOST`, default `claude-host`) when that host answers, else
+  the OpenAI audio API. `openai`, `local` (CUDA faster-whisper), `remote`, and
+  `parakeet` pin a specific backend. A 429 on YouTube subtitles counts as "no
+  captions", so rate-limited videos still reach this fallback.
 - **Borrowable GPU**: run `gpu_node.py` on the PC with the CUDA GPU and set
   `GPU_NODE_URL` — the worker borrows that GPU whenever the machine is
   powered on. The dashboard shows the node online/offline and can pin the
